@@ -27,10 +27,22 @@ def baseline_dead(window):
     return method
 
 
+def control_dead():
+    """Control-event rule (step 2) with the step-1 dead-ball detector for D."""
+    def method(match):
+        from mtah import dead_ball, features
+        from mtah.possession.control import control_events, possession_from_events
+        is_dead, _, _ = dead_ball.detect(match, features.compute(match))
+        return possession_from_events(control_events(match), np.asarray(match.graded), is_dead)
+    method.__name__ = "control_dead"
+    return method
+
+
 METHODS = {
     "baseline_raw": baseline(0),
     "baseline_smooth25": baseline(25),
     "baseline_smooth50": baseline(50),
     "baseline_smooth125": baseline(125),
     "baseline50_dead": baseline_dead(50),
+    "control_dead": control_dead(),
 }
