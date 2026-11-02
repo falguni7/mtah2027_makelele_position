@@ -18,6 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "starter"))
 from mtah.cache import load  # noqa: E402
+from mtah.methods import nearest_player_codes  # noqa: E402
 from baseline import smooth, VARIANTS  # noqa: E402
 
 # Params
@@ -47,19 +48,6 @@ def project(matrices, x, y):
 
 def inside_image(u, v):
     return (u >= 0) & (u < IMAGE_SIZE[0]) & (v >= 0) & (v < IMAGE_SIZE[1])
-
-
-def nearest_player_codes(match):
-    """The official baseline's step 1, vectorised: team of the player nearest the ball, -1 if none.
-
-    Same rule as starter/baseline.py, including that the first slot wins an exact tie.
-    """
-    offsets = match.players_xy - match.ball_xy[:, None, :]
-    distance = np.einsum("fsk,fsk->fs", offsets, offsets)
-    distance = np.where(np.isnan(distance), np.inf, distance)
-    nearest = distance.argmin(axis=1)
-    has_answer = match.ball_present & np.isfinite(distance.min(axis=1))
-    return np.where(has_answer, match.team_of_slot[nearest], -1).astype(np.int8)
 
 
 def main():
