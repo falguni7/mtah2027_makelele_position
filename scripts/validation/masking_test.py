@@ -1,14 +1,14 @@
 """Masking test: how much does each method's output change when the ball is hidden?
 
-    python scripts/masking_test.py                                   # all methods, real gap lengths
-    python scripts/masking_test.py --methods baseline_smooth50 --by-length
-    python scripts/masking_test.py --reference outputs/best.csv      # fixed reference labelling
+    python scripts/validation/masking_test.py                                   # all methods, real gap lengths
+    python scripts/validation/masking_test.py --methods baseline_smooth50 --by-length
+    python scripts/validation/masking_test.py --reference outputs/best.csv      # fixed reference labelling
 
 Default mode: blocks with lengths drawn from the real gap distribution, covering about
 --fraction of the graded frames, repeated for --seeds seeds.
 --by-length: one run per fixed block length (1 s ... 2 min), to see where a method breaks down.
 
-Prints aggregates only. See mtah/masking.py for what the numbers mean, and do not read them as
+Prints aggregates only. See mtah/validation/masking.py for what the numbers mean, and do not read them as
 accuracy: the reference is not ground truth.
 """
 
@@ -19,10 +19,10 @@ import sys
 import numpy as np
 import pandas as pd
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
-from mtah import masking  # noqa: E402
-from mtah.cache import load  # noqa: E402
+from mtah.data import load  # noqa: E402
+from mtah.validation import masking  # noqa: E402
 from mtah.methods import METHODS  # noqa: E402
 
 # Params

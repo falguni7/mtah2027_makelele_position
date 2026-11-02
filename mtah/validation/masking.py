@@ -17,25 +17,16 @@ outside the windows, so every window is scored as its own run, like a half.
 """
 
 import copy
-import os
-import sys
 
 import numpy as np
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "evaluation"))
-import possession_metrics as pm  # noqa: E402
+import possession_metrics as pm  # evaluation/, on the path via mtah/__init__.py
+from mtah.utils import runs_of
 
 # Params
 MIN_PRESENT = 0.9        # a block is only placed where the ball is tracked on this share of it
 MARGIN = 250             # frames scored either side of a block (10 s): changes leak past its edges
 MAX_ATTEMPTS = 2000      # random placements tried per block before giving up
-
-
-def runs_of(mask):
-    """[(start, stop)] half-open runs where mask is True."""
-    edges = np.diff(np.concatenate(([0], mask.astype(np.int8), [0])))
-    return list(zip(np.flatnonzero(edges == 1).tolist(), np.flatnonzero(edges == -1).tolist()))
 
 
 def real_gap_lengths(match):

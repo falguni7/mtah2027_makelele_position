@@ -1,6 +1,6 @@
 """Check the cache against independent facts about the match. Prints aggregates only.
 
-    python scripts/check_cache.py
+    python scripts/data/check_cache.py
 
 Every check compares the cache with something it was NOT built from: published frame counts and
 kickoff frames, the Smart Tagging clock, the camera, and the official baseline submissions. A
@@ -14,11 +14,10 @@ import sys
 import numpy as np
 import pandas as pd
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "starter"))
-from mtah.cache import load  # noqa: E402
-from mtah.methods import nearest_player_codes  # noqa: E402
+from mtah.data import load  # noqa: E402
+from mtah.possession.baseline import nearest_player_codes  # noqa: E402
 from baseline import smooth, VARIANTS  # noqa: E402
 
 # Params
@@ -125,7 +124,6 @@ def main():
 
     print("\nhomography and camera")
     graded = np.flatnonzero(match.graded)
-    matrices = np.asarray(match.homography[graded])
     check("homography valid on graded frames", bool(match.homography_valid[graded].all()),
           "{:.1%}".format(match.homography_valid[graded].mean()))
     with_ball = graded[match.ball_present[graded]]

@@ -38,19 +38,19 @@ evaluation/results/*.csv
 !evaluation/results/baseline_*.csv
 evaluation/reports/
 evaluation/scoreboard.csv
-submissions/
-logs/
+/submissions/
+/logs/
 *.log
 
 # -- caches, features and models -----------------------------------------------------------------
 # Derived from the match data and regenerable, so never committed.
-cache/
-features/
-outputs/
-runs/
-checkpoints/
-wandb/
-lightning_logs/
+/cache/
+/features/
+/outputs/
+/runs/
+/checkpoints/
+/wandb/
+/lightning_logs/
 *.npy
 *.npz
 *.h5

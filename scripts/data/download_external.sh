@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download the public external datasets (other matches, not BAR-ATH) into external/.
 #
-#   bash scripts/download_external.sh            # all three, ~6.5 GB
+#   bash scripts/data/download_external.sh            # all three, ~6.5 GB
 #
 #   external/dfl/          DFL Bundesliga open data, 7 matches, CC BY 4.0 (figshare 28196177)
 #                          Bassek et al., Scientific Data 12, 195 (2025)
@@ -9,7 +9,7 @@
 #   external/skillcorner/  SkillCorner open data, 10 A-League matches, MIT
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$ROOT/external"
 mkdir -p "$OUT/dfl"
 

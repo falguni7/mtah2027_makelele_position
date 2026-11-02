@@ -13,16 +13,12 @@ Facts about the files that the code below relies on (measured, see the dataset n
 """
 
 import io
-import os
-import sys
 import xml.etree.ElementTree as ET
 
 import numpy as np
 import pandas as pd
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-from games import GAME, DEFAULT_SOURCE, require, source_frames  # noqa: E402
+from games import GAME, DEFAULT_SOURCE, require, source_frames
 
 # Params
 N_SLOTS = 46

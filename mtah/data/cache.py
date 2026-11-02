@@ -1,7 +1,7 @@
 """The numpy cache: the match parsed once, loaded in about a second.
 
-    python scripts/build_cache.py            # once, ~1 min
-    from mtah.cache import load
+    python scripts/data/build_cache.py            # once, ~1 min
+    from mtah.data import load
     match = load()                           # memory-mapped arrays, see Match below
 
 One folder per source under cache/ (or $MTAH_CACHE_DIR), one .npy per array plus meta.json.
@@ -14,15 +14,13 @@ The cache is derived from the match data, so it is gitignored and never leaves t
 
 import json
 import os
-import sys
 import time
 
 import numpy as np
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-from games import GAME, GAMES, DEFAULT_SOURCE, asset_paths, half_video_blocks  # noqa: E402
-from mtah import io  # noqa: E402
+from games import GAME, GAMES, DEFAULT_SOURCE, asset_paths, half_video_blocks
+from mtah import ROOT
+from mtah.data import io
 
 # Params
 CACHE_DIR = os.environ.get("MTAH_CACHE_DIR") or os.path.join(ROOT, "cache")
@@ -137,7 +135,7 @@ class Match:
     reprojection_error  (n,)       float32
     homography_valid    (n,)       bool
     team_of_slot        (46,)      int8     0 home, 1 away
-    smart_tagging       DataFrame or None   see mtah.io.read_smart_tagging
+    smart_tagging       DataFrame or None   see mtah.data.io.read_smart_tagging
     meta                dict               meta.json, plus shortcuts below
     """
 
@@ -167,15 +165,15 @@ def load(game=GAME, source=DEFAULT_SOURCE, data_dir=None, mmap=True):
     folder = cache_dir(game, source)
     meta_path = os.path.join(folder, "meta.json")
     if not os.path.isfile(meta_path):
-        raise IOError("no cache at {}\nBuild it first:  python scripts/build_cache.py".format(
+        raise IOError("no cache at {}\nBuild it first:  python scripts/data/build_cache.py".format(
             folder))
     with open(meta_path) as handle:
         meta = json.load(handle)
     if meta.get("version") != CACHE_VERSION:
         raise IOError("cache at {} is version {}, code expects {}. Rebuild it:  python "
-                      "scripts/build_cache.py".format(folder, meta.get("version"), CACHE_VERSION))
+                      "scripts/data/build_cache.py".format(folder, meta.get("version"), CACHE_VERSION))
     current = _source_stats(game, data_dir, source)
     if current and current != meta.get("sources"):
         raise IOError("cache at {} was built from different input files. Rebuild it:  python "
-                      "scripts/build_cache.py".format(folder))
+                      "scripts/data/build_cache.py".format(folder))
     return Match(folder, mmap=mmap)
