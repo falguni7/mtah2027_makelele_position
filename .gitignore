@@ -9,6 +9,8 @@
 data/*
 !data/README.md
 hackathon_dataset/
+# External matches from other games (public datasets), downloaded by script.
+external/
 
 # Insurance in case data files land anywhere else in the tree.
 *.mp4
