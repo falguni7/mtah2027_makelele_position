@@ -70,6 +70,14 @@ PER_TEAM = PER_TEAM_V1 + ["depth", "hull_area", "approach", "marking_rate"]
 def columns_of(per_team):
     """Table column names for a list of per-team features: _h, _a, _diff of each, then camera.
 
+    Every per-team feature appears in the table three times: once for the home team (suffix _h),
+    once for the away team (_a) and once as home minus away (_diff), which is often the most
+    telling, since possession is about one team relative to the other. The two camera columns
+    come last and are always included, as they belong to neither team. This is how a feature set
+    is named for the shape model: COLUMNS_V1 (the step-4 set) and COLUMNS (all features) are
+    both built with it, and so is any subset used to compare features, e.g. in
+    scripts/possession/shape_check.py.
+
         columns_of(["advance"])
         # -> ["advance_h", "advance_a", "advance_diff", "camera_advance_h", "camera_y"]
     """

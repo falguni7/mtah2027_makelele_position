@@ -70,7 +70,16 @@ def agreement_on(labels, tagged, frames):
             float(((labels != tagged[covered]) & (labels != "D")).mean()))
 
 
-# Shape feature sets compared in part 1: the step-4 set, each idea added on its own, and all.
+# Shape feature sets compared in part 1, each a list of table columns. The shape model is
+# trained and scored once per set, with everything else identical, so the difference in
+# accuracy is due to the features alone:
+#   v1 (step 4)       the original 29 columns (advance, lines, spread, velocity, marking, camera)
+#   + idea 9          adds approach and marking_rate: is a team closing in on its opponents
+#                     (pressing, likely defending) or moving away from them (likely in possession)
+#   + idea 10         adds depth and hull_area: is a team compact (likely defending) or spread
+#                     out (likely attacking)
+#   all (hmm_v3)      both ideas, the set hmm_v3 uses
+# Example row of the output: "v1 + depth, hull_area (idea 10)   35 features  overall 0.869 ...".
 FEATURE_SETS = {
     "v1 (step 4)": team_shape.COLUMNS_V1,
     "v1 + approach, marking_rate (idea 9)": team_shape.columns_of(
