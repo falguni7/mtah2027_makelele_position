@@ -38,6 +38,18 @@ def control_dead():
     return method
 
 
+def hmm_v1():
+    """Step 3: dead-ball probabilities and control events decoded together with Viterbi."""
+    def method(match):
+        from mtah import dead_ball, features
+        from mtah.possession.control import control_events
+        from mtah.temporal.hmm import decode
+        _, p_dead, dead_labels = dead_ball.detect(match, features.compute(match))
+        return decode(match, control_events(match), p_dead, dead_labels)
+    method.__name__ = "hmm_v1"
+    return method
+
+
 METHODS = {
     "baseline_raw": baseline(0),
     "baseline_smooth25": baseline(25),
@@ -45,4 +57,5 @@ METHODS = {
     "baseline_smooth125": baseline(125),
     "baseline50_dead": baseline_dead(50),
     "control_dead": control_dead(),
+    "hmm_v1": hmm_v1(),
 }

@@ -4,6 +4,7 @@
     mtah.features      per-frame features from the cache
     mtah.dead_ball     dead-ball detection (roadmap step 1)
     mtah.possession    who has the ball (steps 2-4); the official baseline lives here
+    mtah.temporal      decoding the whole match at once (step 3)
     mtah.validation    comparing methods without labels (masking test)
     mtah.methods       every method by name, for the scripts
     mtah.utils         small shared helpers on per-frame arrays
