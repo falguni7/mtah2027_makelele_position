@@ -21,6 +21,9 @@ Evidence per frame (log score added to a state):
                so a change lands at the start of the new team's event, not earlier. After a
                confident dead stretch, the "last" team is the next event's (the restart taker).
 
+  shape        (step 4, optional) far from any control event, TEAM_WEIGHT * log P(team) from
+               the ball-free team-shape model; the only team evidence inside long ball gaps.
+
 Transitions pay a fixed cost: TEAM_SWITCH for H <-> A, DEAD_SWITCH for entering or leaving D.
 A stoppage of n seconds therefore needs about 2 * DEAD_SWITCH of evidence, which acts as a soft
 minimum duration.
@@ -41,12 +44,13 @@ DEAD_WEIGHT = 0.1          # ~ one independent observation every 0.4 s
 PINNED = 50.0              # log-score gap that a confident label imposes
 EVENT_COST = 5.0
 CARRY_COST = 0.02          # per frame, 0.5 per second
+TEAM_WEIGHT = 0.05         # shape-model evidence, ~ one observation per 0.8 s
 TEAM_SWITCH = 2.0
 DEAD_SWITCH = 4.0
 
 
-def emissions(n, events, p_dead, dead_labels, graded):
-    """(n, 3) log scores for H, A, D."""
+def emissions(n, events, p_dead, dead_labels, graded, p_home=None, shape_frames=None):
+    """(n, 3) log scores for H, A, D. p_home / shape_frames: step-4 evidence and where to use it."""
     p = np.clip(np.asarray(p_dead, dtype=np.float64), *P_CLIP)
     score = np.zeros((n, 3))
     score[:, D] = DEAD_WEIGHT * np.log(p)
@@ -82,6 +86,12 @@ def emissions(n, events, p_dead, dead_labels, graded):
     free = (in_event < 0) & (carry >= 0)
     for team in (H, A):
         score[free & (carry == team), 1 - team] -= CARRY_COST
+
+    if p_home is not None:
+        use = np.asarray(shape_frames) & np.isfinite(p_home)
+        q = np.clip(np.asarray(p_home, dtype=np.float64)[use], *P_CLIP)
+        score[use, H] += TEAM_WEIGHT * np.log(q)
+        score[use, A] += TEAM_WEIGHT * np.log1p(-q)
     return score
 
 
@@ -124,10 +134,10 @@ def viterbi(score, transition):
     return path
 
 
-def decode(match, events, p_dead, dead_labels):
+def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None):
     """Per-frame "H" / "A" / "D" labels; each graded half is decoded on its own."""
     graded = np.asarray(match.graded)
-    score = emissions(match.n_frames, events, p_dead, dead_labels, graded)
+    score = emissions(match.n_frames, events, p_dead, dead_labels, graded, p_home, shape_frames)
     transition = transition_matrix()
     labels = np.full(match.n_frames, "D", dtype="<U1")
     for start, stop in runs_of(graded):

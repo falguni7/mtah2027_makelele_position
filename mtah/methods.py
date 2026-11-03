@@ -50,6 +50,29 @@ def hmm_v1():
     return method
 
 
+def shape_evidence(match, events):
+    """Step 4: out-of-fold P(home) from the ball-free shape model, and the frames to use it on."""
+    from mtah.features import team_shape
+    from mtah.possession import shape_model
+    target = shape_model.pseudo_labels(match, events)
+    p_home, _ = shape_model.out_of_fold(team_shape.compute(match), target, match.graded)
+    return p_home, shape_model.gap_frames(match, events)
+
+
+def hmm_v2():
+    """Step 4: hmm_v1 plus team evidence from the shape model away from control events."""
+    def method(match):
+        from mtah import dead_ball, features
+        from mtah.possession.control import control_events
+        from mtah.temporal.hmm import decode
+        _, p_dead, dead_labels = dead_ball.detect(match, features.compute(match))
+        events = control_events(match)
+        p_home, frames = shape_evidence(match, events)
+        return decode(match, events, p_dead, dead_labels, p_home, frames)
+    method.__name__ = "hmm_v2"
+    return method
+
+
 METHODS = {
     "baseline_raw": baseline(0),
     "baseline_smooth25": baseline(25),
@@ -58,4 +81,5 @@ METHODS = {
     "baseline50_dead": baseline_dead(50),
     "control_dead": control_dead(),
     "hmm_v1": hmm_v1(),
+    "hmm_v2": hmm_v2(),
 }
