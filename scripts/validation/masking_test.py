@@ -1,15 +1,36 @@
 """Masking test: how much does each method's output change when the ball is hidden?
 
-    python scripts/validation/masking_test.py                                   # all methods, real gap lengths
+    python scripts/validation/masking_test.py                 # all methods, real gap lengths
     python scripts/validation/masking_test.py --methods baseline_smooth50 --by-length
-    python scripts/validation/masking_test.py --reference outputs/best.csv      # fixed reference labelling
+    python scripts/validation/masking_test.py --reference outputs/best.csv   # fixed reference
+    sbatch scripts/slurm/run.sbatch scripts/validation/masking_test.py --methods hmm_v2
+
+The ball is hidden on blocks of frames where it IS tracked, each method is run on the masked
+match, and its output is scored against a reference on windows around the blocks (block +/-
+10 s) with the official scorer. Nothing is written to disk.
 
 Default mode: blocks with lengths drawn from the real gap distribution, covering about
 --fraction of the graded frames, repeated for --seeds seeds.
 --by-length: one run per fixed block length (1 s ... 2 min), to see where a method breaks down.
+--reference: a frame,label CSV used as the reference for every method, instead of each
+method's own unmasked output.
 
-Prints aggregates only. See mtah/validation/masking.py for what the numbers mean, and do not read them as
-accuracy: the reference is not ground truth.
+Prints aggregates only. See mtah/validation/masking.py for what the numbers mean, and do not
+read them as accuracy: the reference is not ground truth. The work log notes a run of four
+baseline methods taking about 30 s on a compute node.
+
+How to read the output: first a line on the real ball gaps (count, median, p90 and longest, in
+seconds), then the reference used, then one row per method and block length ("real" or e.g.
+"10 s"), averaged over the seeds:
+  spell_f1            official possession-spell F1 of the masked output against the reference,
+                      on the windows; 1 means the same possessions as the reference
+  spell_f1_unmasked   with --reference only: the same score for the unmasked output, the
+                      ceiling the masked output can reach
+  macro_f1            official per-frame macro F1 on the windows
+  agreement           share of masked frames where masked output and reference agree
+  n_blocks            blocks placed (can be fewer than asked when they do not fit)
+  masked_frames       frames hidden in total
+  spell_f1_sd         with more than one seed: standard deviation of spell_f1 across seeds
 """
 
 import argparse
@@ -30,6 +51,18 @@ FIXED_LENGTHS = (25, 125, 250, 750, 1500, 3000)    # 1 s, 5 s, 10 s, 30 s, 1 min
 
 
 def blocks_for(match, args, rng, gap_lengths, length=None):
+    """[(start, stop)] blocks to hide the ball on, covering about args.fraction of graded frames.
+
+    With a fixed `length` (frames): as many blocks of that length as fit the fraction, at least
+    one. Without: lengths drawn at random from the real gap lengths `gap_lengths` until they add
+    up to the fraction. Either way masking.sample_blocks then places them where the ball is
+    tracked, dropping any that do not fit, so the result can be shorter than asked.
+
+        # 10000 graded frames, args.fraction = 0.15 -> 1500 frames to hide
+        blocks_for(match, args, rng, gap_lengths, length=250)   # asks for 6 blocks of 250
+        blocks_for(match, args, rng, [250, 500])                # e.g. 500, 250, 500, 250
+        # -> e.g. [(1200, 1450), (3000, 3500), ...]
+    """
     if length is not None:
         count = int(args.fraction * match.graded.sum() / length)
         return masking.sample_blocks(match, [length] * max(count, 1), rng)
@@ -41,6 +74,11 @@ def blocks_for(match, args, rng, gap_lengths, length=None):
 
 
 def main():
+    """Parse the options, run the masking test for every chosen method and print the table.
+
+    For each method: its unmasked output (the default reference), then for every block length
+    and seed a masked run scored against the reference. Nothing is returned or written.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--methods", nargs="+", default=sorted(METHODS), choices=sorted(METHODS))
     parser.add_argument("--reference", help="frame,label CSV to score against instead of each "

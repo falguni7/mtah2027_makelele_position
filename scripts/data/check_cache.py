@@ -1,11 +1,24 @@
 """Check the cache against independent facts about the match. Prints aggregates only.
 
     python scripts/data/check_cache.py
+    sbatch scripts/slurm/run.sbatch scripts/data/check_cache.py
 
-Every check compares the cache with something it was NOT built from: published frame counts and
-kickoff frames, the Smart Tagging clock, the camera, and the official baseline submissions. A
-failure means the parsing or the alignment is wrong, and every later result would be too.
-Exit code 1 if any check fails.
+Most checks compare the cache with something it was NOT built from: published frame counts and
+kickoff frames, the Smart Tagging clock, the camera, and the official baseline submissions. A few
+are internal consistency checks (players per frame, teams swap ends, homography valid, tags
+inside the video). A failure means the parsing or the alignment is wrong, and every later
+result would be too. Exit code 1 if any check fails. Run it after every build_cache.py.
+
+Output: a first line with the cache size and team names, then one block per topic (frames and
+halves, kickoffs, smart tagging, homography and camera, baseline reproduced from the cache), one
+line per check:
+
+      [ok] <what is checked, padded to 44 characters> <the measured value>
+      [FAIL] ...                                      (the text starts two columns later)
+
+The right-hand detail is the number the verdict was based on, e.g. "3 of 10 frames differ" for
+a baseline file. Lines starting with "info:", indented by 7 spaces, are facts worth knowing,
+not checks. The last line is "<n> checks, <m> failed". Nothing is written to disk.
 """
 
 import os
@@ -21,7 +34,7 @@ from mtah.possession.baseline import nearest_player_codes  # noqa: E402
 from baseline import smooth, VARIANTS  # noqa: E402
 
 # Params
-N_GRADED = 158857                       # EVALUATION.md
+N_GRADED = 158857                       # CHALLENGE.md / DATA.md
 KICKOFFS = {1: 11185, 2: 113742}        # DATA.md / FAQ.md, video frames
 IMAGE_SIZE = (1920, 1080)
 KICKOFF_SEARCH = 25                     # look this far for a tracked ball at kickoff
@@ -34,22 +47,52 @@ results = []
 
 
 def check(name, ok, detail):
+    """Record one check's verdict and print it as one aligned line.
+
+    `ok` is the verdict, `detail` the measured value that justifies it. The verdict is kept in
+    the module-level `results` list, which main() counts at the end for the exit code.
+
+        check("toy check", False, "3 of 10 frames differ")
+        # prints   "  [FAIL] toy check   ...   3 of 10 frames differ"  (name padded to 44;
+        #          after "[FAIL]" the name starts two columns later than after "[ok]")
+        # results  -> [..., False]
+    """
     results.append(ok)
     print("  [{}] {:<44} {}".format("ok" if ok else "FAIL", name, detail))
 
 
 def project(matrices, x, y):
-    """Normalised pitch -> pixels, one matrix per point."""
+    """Normalised pitch -> pixels, one matrix per point.
+
+    Maps pitch positions given as fractions of the pitch (x of the length, y of the width, both
+    0..1) to image pixels (u, v) with each point's own 3 x 3 homography. Used to ask whether the
+    tracked ball lies inside the camera picture.
+
+        matrices = np.array([[[1920, 0, 0], [0, 1080, 0], [0, 0, 1]]])   # one point, a scaling
+        project(matrices, np.array([0.5]), np.array([0.25]))       # -> ([960.], [270.])
+    """
     denominator = matrices[:, 2, 0] * x + matrices[:, 2, 1] * y + matrices[:, 2, 2]
     return ((matrices[:, 0, 0] * x + matrices[:, 0, 1] * y + matrices[:, 0, 2]) / denominator,
             (matrices[:, 1, 0] * x + matrices[:, 1, 1] * y + matrices[:, 1, 2]) / denominator)
 
 
 def inside_image(u, v):
+    """True where the pixel (u, v) lies inside the 1920 x 1080 video frame.
+
+    u counts pixels from the left edge, v from the top; the far edges themselves are outside.
+
+        inside_image(np.array([100, 1920, -1]), np.array([100, 500, 10]))
+        # -> [True, False, False]
+    """
     return (u >= 0) & (u < IMAGE_SIZE[0]) & (v >= 0) & (v < IMAGE_SIZE[1])
 
 
 def main():
+    """Run every check on the cache, print them, and return the exit code.
+
+    Loads the cache (memory-mapped), prints the topic blocks described at the top of this file
+    and returns 1 if any check failed, 0 if all passed; the script exits with that code.
+    """
     match = load()
     length, width = match.pitch
     print("cache: {} frames, teams H = {}, A = {}".format(

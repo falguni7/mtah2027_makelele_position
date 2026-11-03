@@ -1,10 +1,26 @@
 """Compare methods on the full match without labels, and write their submissions.
 
     python scripts/validation/compare_methods.py baseline_smooth50 baseline50_dead control_dead
+    sbatch scripts/slurm/run.sbatch scripts/validation/compare_methods.py control_dead hmm_v2
 
 For each method: label shares, possessions (count and mean length, as the official scorer counts
 them), and agreement with Smart Tagging's in-possession phases (mtah/validation/tagging.py).
 Each submission is written to evaluation/results/<method>.csv. Aggregates only.
+
+WARNING: for the method names baseline_raw, baseline_smooth25, baseline_smooth50 and
+baseline_smooth125 (as in the first example above) that path is an official, git-tracked file in
+evaluation/results/, which would be overwritten (scripts/data/check_cache.py compares against
+those files). Use other method names to keep the official files intact.
+
+How to read the output: first the number of graded frames inside Smart Tagging in-possession
+phases (the frames the tag_* columns are computed on), then one row per method:
+  H, A, D              share of graded frames labelled home, away and dead ball
+  possessions          number of possession spells (maximal H or A runs within a half)
+  mean_s, median_s     their mean and median length in seconds
+  tag_agree            share of tagged frames where the method names the tagged team
+  tag_disagree         share where it names the other team
+  tag_dead             share where it says D
+Smart Tagging is automatic and has errors, so tag_agree is a consistency check, not accuracy.
 """
 
 import argparse

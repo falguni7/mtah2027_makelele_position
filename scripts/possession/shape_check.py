@@ -1,12 +1,34 @@
 """Check the ball-free team-shape model (step 4). Prints aggregates only.
 
     python scripts/possession/shape_check.py
+    sbatch scripts/slurm/run.sbatch scripts/possession/shape_check.py
+
+The shape model guesses which team has the ball from where the players stand and move, without
+the ball, so it can fill ball gaps. It is trained on pseudo-labels from the step-2 control rule:
+frames inside a control event and passes between two events of the same team. Nothing is
+written to disk.
 
 1. Held-out accuracy on the pseudo-labels, per contiguous time block (out-of-fold).
 2. Where it matters -- frames at least 2 s from any control event, i.e. inside ball gaps and
    long loose phases -- agreement with Smart Tagging's in-possession team for: the carry rule
-   (control_dead), the shape model on its own, and hmm_v2. Smart Tagging is not used by any of
-   them, so it is an independent opinion (not ground truth).
+   (control_dead), the shape model on its own, and hmm_v2. Smart Tagging's in-possession
+   phases are not used by any of them (the dead-ball detector does use the SET PIECES and GOALS
+   tags), so the comparison is independent of what it measures; an opinion, not ground truth.
+
+How to read the output:
+  pseudo-labels        frames with a pseudo-label, their share of graded frames, and the share
+                       of them where the home team has the ball
+  block table          per time block: block number, labelled frames in it, held-out accuracy
+                       (P(home) > 0.5 against the pseudo-label), home share in that block
+  overall              held-out accuracy on all labelled frames; majority class is the accuracy
+                       of always guessing the more common team, the number to beat
+  confidence a-b       frames whose max(P(home), P(away)) lies in [a, b): their share of the
+                       labelled frames and the accuracy there; accuracy should rise with
+                       confidence
+  part 2               for all far frames, then far frames without a tracked ball: per method
+                       the number of those frames inside an in-possession phase, the share where
+                       the method names the tagged team (agree) and the other team (disagree);
+                       the rest is D
 """
 
 import os
@@ -26,6 +48,18 @@ from mtah.validation import tagging  # noqa: E402
 
 
 def agreement_on(labels, tagged, frames):
+    """(n, agree, disagree) of labels against Smart Tagging, on the selected frames only.
+
+    `tagged` is the per-frame tagged team ("H", "A" or "" outside in-possession phases) and
+    `frames` a mask of frames to look at. n counts selected frames that are tagged; agree is the
+    share of them where labels name the tagged team, disagree the share where they name the
+    other team. D counts as neither, so agree + disagree is below 1 when labels say D.
+
+        labels = np.array(["H", "A", "D", "H"])
+        tagged = np.array(["H", "H", "H", ""])
+        frames = np.array([True, True, True, True])
+        agreement_on(labels, tagged, frames)               # -> (3, 0.333, 0.333)
+    """
     covered = frames & (tagged != "")
     labels = np.asarray(labels)[covered]
     return (len(labels), float((labels == tagged[covered]).mean()),

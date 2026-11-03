@@ -10,6 +10,19 @@ Facts about the files that the code below relies on (measured, see the dataset n
     missing values written as NaN. x, y are normalised 0-1; speed is m/s (the XML says kph).
   * The ball's speed field is a tracker artifact and is dropped. Derive speed from positions.
   * Slot teams come from the ATD metadata; the first team listed is home.
+
+One reader per provided file. Coordinates stay normalised (0-1) here; cache.py scales them to
+metres. Nothing outside cache.build() needs to call these directly:
+
+    read_atd_meta()                 team names, team of each of the 46 slots, goalkeeper slots
+    read_atd_raw()                  player and ball positions per video frame
+    read_homography()               pitch -> image homography per video frame
+    read_smart_tagging(names)       Smart Tagging instances (tactical source only)
+
+    from mtah.data import io
+    meta = io.read_atd_meta()
+    players, ball = io.read_atd_raw()
+    players.shape, ball.shape       # -> (n_frames, 46, 3), (n_frames, 2)
 """
 
 import io
@@ -29,7 +42,19 @@ HOMOGRAPHY_COLUMNS = ["h{}{}".format(row, col) for row in range(3) for col in ra
 def read_atd_meta(game=GAME, data_dir=None, source=DEFAULT_SOURCE):
     """{team_names: (home, away), team_of_slot: (46,) int8, goalkeeper_slots: (home, away)}.
 
-    Slots are 0-based here (the XML's "Track 1" is slot 0).
+    Slots are the document order of the <Player> elements, 0-based (the XML's "Track 1" is slot
+    0).
+
+    The ATD has 46 player slots (both squads); this says which team each slot belongs to (0
+    home, 1 away, home being the first team listed; any teamId other than the home one is
+    treated as away) and which slot is each team's goalkeeper. Raises ValueError unless there
+    are exactly 2 teams, 46 slots and at least one goalkeeper per team; if a team has several
+    goalkeeper slots, the last listed one is used.
+
+        meta = read_atd_meta()
+        meta["team_names"]              # -> e.g. ("Home FC", "Away FC")
+        meta["team_of_slot"][:3]        # -> e.g. array([0, 0, 0], dtype=int8)
+        meta["goalkeeper_slots"]        # -> e.g. (0, 23)
     """
     meta_path = require(["atd_meta"], game, data_dir, source)[0]
     root = ET.parse(meta_path).getroot()
@@ -70,6 +95,16 @@ def read_atd_raw(game=GAME, data_dir=None, source=DEFAULT_SOURCE):
     Every separator becomes a comma so pandas' C parser reads the file as one numeric table:
     1 frame id + 46 * 3 player values + 3 ball values = 142 columns. Takes ~20 s, versus minutes
     for a line-by-line Python loop.
+
+    Row i is video frame i (the file's frame_id i + 1). Raises ValueError if a line has more
+    than 142 values or the frame ids are not 1..n_frames without gaps. The ball's third value
+    (its speed) is dropped, see the module notes. A line with fewer than 142 values is padded
+    with NaN by the parser and is not detected.
+
+        line "1:0.5,0.5,2.0;...:0.52,0.49,NaN"    # frame_id 1, slot 0 at the centre, 2.0 m/s
+        players, ball = read_atd_raw()
+        players[0, 0]                   # -> [0.5, 0.5, 2.0]     video frame 0, slot 0
+        ball[0]                         # -> [0.52, 0.49]
     """
     raw_path = require(["atd_raw"], game, data_dir, source)[0]
     n_frames = source_frames(source, game)
@@ -96,6 +131,14 @@ def read_homography(game=GAME, data_dir=None, source=DEFAULT_SOURCE):
     """(matrices (n, 3, 3) float64, reprojection_error (n,) float32, valid (n,) bool).
 
     The matrices map normalised pitch coordinates (0-1) to image pixels.
+
+    One row per video frame of the source's homography CSV. reprojection_error and valid are
+    taken from the file as is: they say how well, and whether, the camera calibration holds on
+    that frame. Raises ValueError if the rows are not exactly frames 0..n_frames - 1.
+
+        matrices, error, valid = read_homography()
+        u, v, w = matrices[0] @ [0.5, 0.5, 1.0]     # pitch centre, video frame 0
+        (u / w, v / w)                  # -> e.g. (960.0, 540.0)   pixel position
     """
     path = require(["homography"], game, data_dir, source)[0]
     table = pd.read_csv(path)
@@ -116,6 +159,14 @@ def read_smart_tagging(team_names, game=GAME, data_dir=None, fps=25):
     The Team tag names a club, mapped to H / A through the ATD metadata's team names (the two
     files spell them identically). "N/A" (throw-ins, kick-offs) becomes None. An unknown club is
     an error rather than a silent guess.
+
+    team_names is (home, away) as returned by read_atd_meta(). Instance times are seconds on
+    the tactical video; frames are round(seconds * fps). Only the tactical source has Smart
+    Tagging.
+
+        <instance> code BUILD UP, start 4.0, end 6.5, Team "Home FC", Half "1st" ...
+        read_smart_tagging(("Home FC", "Away FC")).iloc[0]
+        # -> code "BUILD UP", start_s 4.0, end_s 6.5, start_frame 100, end_frame 162, team "H", ...
     """
     path = require(["smart_tagging"], game, data_dir)[0]
     side_of_club = {team_names[0]: "H", team_names[1]: "A", "N/A": None, None: None}

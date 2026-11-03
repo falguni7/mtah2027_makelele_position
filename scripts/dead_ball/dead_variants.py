@@ -1,6 +1,14 @@
 """Compare dead-ball detector variants without labels. Prints aggregates only.
 
     python scripts/dead_ball/dead_variants.py
+    sbatch scripts/slurm/run.sbatch scripts/dead_ball/dead_variants.py
+
+Each variant (VARIANTS below) is the detector of mtah/dead_ball/detector.py with different
+feature columns and with or without the "sustained running counts as alive" labels. Each one is
+trained twice (without and with the set-piece labels) and then fed to the step-4 decoder.
+The variant labelled "v1c current" is the step-1 detector (running_alive=False); the detector
+now used by all methods is "v2b running alive".
+Nothing is written to disk.
 
 For each variant:
   restarts     held-out check of dead_check.py (trained without set-piece labels): dead share
@@ -11,6 +19,17 @@ For each variant:
                inside ball gaps far (>= 2 s) from control events. Phases can include short
                stoppages, so this should be low but not zero.
   hmm_v2       the step-4 decoder with this detector: possessions, tag agree / disagree / D
+
+The printed table has one row per variant and these columns:
+  early, late          the two restart numbers above
+  alive_labels         number of frames confidently labelled alive (training examples)
+  dead, dead_in_gaps   dead share of graded frames / of graded frames without a tracked ball
+  tagD, tagD_far_gap   dead share inside in-possession phases / of those, in far ball gaps
+  hmm_poss             possessions in the decoded labelling, counted as the official scorer does
+  hmm_D                share of graded frames the decoder labels D
+  hmm_agree            share of tagged frames where the decoder names the tagged team
+  hmm_disagree         share where it names the other team
+  hmm_tagD             share where it says D
 """
 
 import os
@@ -42,6 +61,14 @@ VARIANTS = {
 
 
 def restart_scores(dead, starts):
+    """(early, late): mean dead share 0-3 s and 10-20 s after each set-piece tag start.
+
+    The same two numbers as dead_check.py's restart_table, returned instead of printed. A good
+    detector is dead just after a tag start (early high) and alive again later (late low).
+
+        dead = np.zeros(1000, bool); dead[0:75] = True     # dead for the first 3 s only
+        restart_scores(dead, starts=[0, 500])              # -> (0.5, 0.0)
+    """
     early = np.mean([dead[s:s + 3 * FPS].mean() for s in starts])
     late = np.mean([dead[s + 10 * FPS:s + 20 * FPS].mean() for s in starts])
     return early, late

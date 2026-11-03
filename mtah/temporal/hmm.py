@@ -12,8 +12,11 @@ call inside a possession has to be strong enough to pay for splitting it.
 Evidence per frame (log score added to a state):
 
   dead ball    DEAD_WEIGHT * log P(state | p_dead) from the step-1 classifier; frames with a
-               confident step-1 label (goal, ball out, set-piece start / moving ball) are pinned.
-               The weight is below 1 because neighbouring frames are near-duplicates: ~25
+               confident step-1 label are pinned. DEAD: goal to kick-off (GOALS tags), the second
+               half before its kick-off, ball tracked out of the pitch, the first seconds
+               after a set-piece tag start. ALIVE: ball tracked and moving inside the pitch,
+               short open-play ball gaps, sustained running by the players (ball tracked or
+               not). The weight is below 1 because neighbouring frames are near-duplicates: ~25
                correlated frames per second must not count as 25 independent observations.
   control      during a step-2 control event of team T, the other team and D pay EVENT_COST
                per frame.
@@ -22,13 +25,21 @@ Evidence per frame (log score added to a state):
                confident dead stretch, the "last" team is the next event's (the restart taker).
 
   shape        (step 4, optional) far from any control event, TEAM_WEIGHT * log P(team) from
-               the ball-free team-shape model; the only team evidence inside long ball gaps.
+               the ball-free team-shape model; inside long ball gaps the only team evidence besides
+               the carry bias (CARRY_COST per frame still applies on shape frames).
 
 Transitions pay a fixed cost: TEAM_SWITCH for H <-> A, DEAD_SWITCH for entering or leaving D.
-A stoppage of n seconds therefore needs about 2 * DEAD_SWITCH of evidence, which acts as a soft
-minimum duration.
+The switch cost does not depend on the stoppage length: entering and leaving D costs
+2 * DEAD_SWITCH = 8 in total (6 more than a direct H -> A switch when the teams differ). At
+p_dead = 0.98 that is about 21 frames (0.8 s) of evidence, so it acts as a soft minimum duration.
 
 Values are chosen from these arguments, not tuned on labels.
+
+What is in it: emissions() builds the (frames, 3) evidence table above, transition_matrix() the
+switch costs, viterbi() finds the best path through one run of frames, and decode() runs it per
+graded half and returns the labels. With the step-4 shape model:
+
+    labels = decode(match, events, p_dead, dead_labels, p_home, shape_frames)
 """
 
 import numpy as np
@@ -50,7 +61,27 @@ DEAD_SWITCH = 4.0
 
 
 def emissions(n, events, p_dead, dead_labels, graded, p_home=None, shape_frames=None):
-    """(n, 3) log scores for H, A, D. p_home / shape_frames: step-4 evidence and where to use it."""
+    """(n, 3) log scores for H, A, D. p_home / shape_frames: step-4 evidence and where to use it.
+
+    One row per frame, one column per state (H = 0, A = 1, D = 2); higher is more likely, and
+    only differences within a row matter. Inputs, all per frame over the n frames: p_dead the
+    step-1 probability of a dead ball, dead_labels its confident labels (DEAD, ALIVE or unknown),
+    graded a bool mask, p_home P(home in possession) from the shape model and shape_frames a bool
+    mask of where to trust it; events are (start, stop, team) control events. The terms are the
+    ones listed in the module docstring: dead-ball evidence for every frame, PINNED (50) against
+    states a confident label rules out, EVENT_COST (5) per frame against the other team and D
+    during an event, CARRY_COST (0.02) per frame against changing team between events, and the
+    shape evidence where shape_frames is set and p_home is known.
+
+        # 4 frames, p_dead 0.5 everywhere, no confident labels, all graded,
+        # one home event at frames 1-2: events = [(1, 3, 0)]
+        emissions(4, events, p_dead, dead_labels, graded)
+        #           H       A       D
+        # -> [[-0.07,  -0.09,  -0.07],    # before the event: carry H, so A pays 0.02
+        #     [-0.07,  -5.07,  -5.07],    # in the event: A and D pay 5
+        #     [-0.07,  -5.07,  -5.07],
+        #     [-0.07,  -0.09,  -0.07]]    # after the event: carry H
+    """
     p = np.clip(np.asarray(p_dead, dtype=np.float64), *P_CLIP)
     score = np.zeros((n, 3))
     score[:, D] = DEAD_WEIGHT * np.log(p)
@@ -96,7 +127,16 @@ def emissions(n, events, p_dead, dead_labels, graded, p_home=None, shape_frames=
 
 
 def transition_matrix():
-    """(3, 3) log transition scores, from row state to column state."""
+    """(3, 3) log transition scores, from row state to column state.
+
+    Staying in a state is free; H <-> A costs TEAM_SWITCH and entering or leaving D costs
+    DEAD_SWITCH, as negative log scores. Rows and columns are H, A, D.
+
+        transition_matrix()
+        # -> [[ 0, -2, -4],      # from H
+        #     [-2,  0, -4],      # from A
+        #     [-4, -4,  0]]      # from D
+    """
     cost = np.zeros((3, 3))
     cost[H, A] = cost[A, H] = TEAM_SWITCH
     cost[H, D] = cost[A, D] = cost[D, H] = cost[D, A] = DEAD_SWITCH
@@ -104,7 +144,24 @@ def transition_matrix():
 
 
 def viterbi(score, transition):
-    """Most likely state sequence for one run of frames."""
+    """Most likely state sequence for one run of frames.
+
+    score is (frames, 3) log evidence per state as from emissions(), transition the (3, 3) log
+    transition scores; returns the int8 states (0 H, 1 A, 2 D) of the path with the highest total
+    of evidence plus transitions. There is no start cost: any first state is allowed. On an exact
+    tie the lower state (H, then A, then D) wins. A change only happens when the evidence for it
+    outweighs the switch cost, so a one-frame blip is smoothed away but a sustained change is not.
+
+        transition = transition_matrix()       # H <-> A costs 2
+        score = [[0, -3, -5],                  # frame 0 says H
+                 [-1, 0, -5],                  # frames 1-3 lean A
+                 [-1, 0, -5],
+                 [-1, 0, -5]]
+        viterbi(score, transition)             # -> [0, 1, 1, 1]  (H A A A, total -2)
+
+        score = [[0, -3, -5], [-1, 0, -5], [0, -3, -5], [0, -3, -5]]   # one A blip
+        viterbi(score, transition)             # -> [0, 0, 0, 0]  (H H H H, total -1)
+    """
     n = len(score)
     back = np.zeros((n, 3), dtype=np.int8)
     best = score[0].copy()
@@ -135,7 +192,16 @@ def viterbi(score, transition):
 
 
 def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None):
-    """Per-frame "H" / "A" / "D" labels; each graded half is decoded on its own."""
+    """Per-frame "H" / "A" / "D" labels; each graded half is decoded on its own.
+
+    The step-3 entry point: builds the evidence with emissions() from the step-2 control events,
+    the step-1 dead-ball probability p_dead and confident dead_labels (and optionally the step-4
+    p_home with the shape_frames where it applies), then runs viterbi() separately on every
+    graded run of the match, so nothing carries over half-time. Frames outside graded are "D".
+
+        # the 4-frame example of emissions(): one home event at frames 1-2, p_dead 0.5
+        decode(match, [(1, 3, 0)], p_dead, dead_labels)   # -> ["H", "H", "H", "H"]
+    """
     graded = np.asarray(match.graded)
     score = emissions(match.n_frames, events, p_dead, dead_labels, graded, p_home, shape_frames)
     transition = transition_matrix()

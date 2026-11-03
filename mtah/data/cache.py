@@ -10,6 +10,17 @@ along the length (0..105.3) and y across the width (0..68). The homography still
 coordinates: divide by match.pitch before projecting.
 
 The cache is derived from the match data, so it is gitignored and never leaves the cluster.
+
+In this file: build() parses the source files (mtah.data.io) and writes the cache; Match is the
+loaded cache; load() finds it, checks it is current and returns a Match. meta.json records the
+CACHE_VERSION and the size and mtime of every input file, so load() refuses a cache built by
+older code or from other files instead of silently returning stale arrays. Half and graded
+masks, Smart Tagging and the playing direction exist only for the tactical source: for the
+broadcast source half.npy and graded.npy are still written but are all 0 / all False,
+smart_tagging is None and home_attacks_right is empty.
+
+    match.ball_xy[1000]                      # -> e.g. [52.6, 34.0]   metres, near the centre
+    match.ball_xy[1000] / match.pitch        # -> e.g. [0.5, 0.5]     normalised, for homography
 """
 
 import json
@@ -32,11 +43,27 @@ ARRAYS = ("players_xy", "players_speed", "player_present", "ball_xy", "ball_pres
 
 
 def cache_dir(game=GAME, source=DEFAULT_SOURCE):
+    """Folder holding the cache of one source of one game: CACHE_DIR/<game>_<source>.
+
+    Only builds the path; the folder may not exist yet.
+
+        cache_dir()                              # -> "<CACHE_DIR>/BAR-ATH_tactical"
+        cache_dir(source="broadcast")            # -> "<CACHE_DIR>/BAR-ATH_broadcast"
+    """
     return os.path.join(CACHE_DIR, "{}_{}".format(game, source))
 
 
 def _source_stats(game, data_dir, source):
-    """Size and mtime of every input file, to detect a cache built from different data."""
+    """Size and mtime of every input file, to detect a cache built from different data.
+
+    {asset name: {"size": bytes, "mtime": whole seconds}} for every provided file of the source
+    that exists, the video excluded (the cache never reads it). Stored in meta.json by build()
+    and compared by load(). Empty when no input file is found, e.g. on a machine with only the
+    cache.
+
+        _source_stats("BAR-ATH", None, "tactical")
+        # -> e.g. {"atd_meta": {"size": 81234, "mtime": 1700000000}, "atd_raw": {...}, ...}
+    """
     stats = {}
     for name, path in asset_paths(game, data_dir, source).items():
         if name != "video" and os.path.isfile(path):
@@ -46,7 +73,18 @@ def _source_stats(game, data_dir, source):
 
 
 def build(game=GAME, data_dir=None, source=DEFAULT_SOURCE, verbose=True):
-    """Parse the source files and write the cache. Returns the cache folder."""
+    """Parse the source files and write the cache. Returns the cache folder.
+
+    Reads the ATD metadata, raw tracking and homography (plus Smart Tagging for the tactical
+    source), converts coordinates to metres, adds the half / graded masks and each half's
+    playing direction (from where the home goalkeeper stands), and writes one .npy per name in
+    ARRAYS, smart_tagging.csv and meta.json into cache_dir(game, source). Overwrites an
+    existing cache. verbose=False silences the progress lines. Takes about a minute; run it via
+    scripts/data/build_cache.py.
+
+        build()                                  # -> "<CACHE_DIR>/BAR-ATH_tactical"
+        # home keeper's median x in half 1 is 10 m (< 105.3 / 2): home_attacks_right[1] = True
+    """
     say = print if verbose else (lambda *args, **kwargs: None)
     start = time.time()
     length, width = GAMES[game]["pitch"]
@@ -135,11 +173,31 @@ class Match:
     reprojection_error  (n,)       float32
     homography_valid    (n,)       bool
     team_of_slot        (46,)      int8     0 home, 1 away
-    smart_tagging       DataFrame or None   see mtah.data.io.read_smart_tagging
+    smart_tagging       DataFrame or None   see mtah.data.io.read_smart_tagging; after the CSV
+                                            round trip a missing team / half / type is NaN
+                                            (float), not None: use .notna() / pd.isna()
     meta                dict               meta.json, plus shortcuts below
+
+    Shortcuts from meta.json: n_frames, fps, pitch (length, width) in metres, team_names (home,
+    away), goalkeeper_slots (home, away), home_attacks_right {half: bool}, True when home attacks
+    towards x = length in that half. Arrays are indexed by video frame: players_xy[i, s] is slot
+    s on frame i.
+
+        match = Match(cache_dir())               # usually via load(), which checks the cache
+        match.pitch                              # -> e.g. (105.3, 68.0)
+        match.players_xy[0, 3]                   # -> e.g. [30.1, 20.5]    slot 3 on frame 0
+        match.team_of_slot[3]                    # -> 0   a home player
     """
 
     def __init__(self, folder, mmap=True):
+        """Load the cache in `folder` (as written by build()).
+
+        mmap=True (the default) memory-maps every array read-only, so loading is fast and only
+        the frames actually used are read from disk; mmap=False reads them fully into memory.
+        Smart Tagging is read from smart_tagging.csv when present (tactical only), else None.
+
+            Match(cache_dir(), mmap=False).ball_present.flags.writeable    # -> True
+        """
         with open(os.path.join(folder, "meta.json")) as handle:
             self.meta = json.load(handle)
         for name in ARRAYS:
@@ -161,7 +219,17 @@ class Match:
 
 
 def load(game=GAME, source=DEFAULT_SOURCE, data_dir=None, mmap=True):
-    """The cached match. Raises if the cache is missing, outdated, or built from other files."""
+    """The cached match. Raises if the cache is missing, outdated, or built from other files.
+
+    The way every script gets the match. Raises IOError, with the command to rebuild, when there
+    is no cache, when it was written with another CACHE_VERSION, or when the input files' size
+    or mtime differ from those recorded at build time. The input check is skipped when the input
+    files are not found at all, so a cache works without the raw data next to it. mmap as for
+    Match.
+
+        match = load()                           # tactical source of BAR-ATH
+        match = load(source="broadcast")         # the broadcast camera, its own timeline
+    """
     folder = cache_dir(game, source)
     meta_path = os.path.join(folder, "meta.json")
     if not os.path.isfile(meta_path):

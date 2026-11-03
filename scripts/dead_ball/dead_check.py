@@ -1,6 +1,10 @@
 """Run the dead-ball detector and check it without labels. Prints aggregates only.
 
     python scripts/dead_ball/dead_check.py
+    sbatch scripts/slurm/run.sbatch scripts/dead_ball/dead_check.py
+
+"Dead" means the ball is out of play (label D). There are no labels to score the detector
+against, so it is checked in two ways:
 
 1. Held-out restarts: train WITHOUT the Smart Tagging set-piece labels, then ask whether the
    detector finds those restarts anyway: dead right after each tag start (the restart comes
@@ -9,7 +13,28 @@
 2. The full detector (all confident labels): how much is dead, in how many stretches, and
    whether stretches end the way restarts do, with the players speeding up.
 
-Writes outputs/dead/{dead,p_dead,labels}.npy for later steps (gitignored).
+Writes outputs/dead/{dead,p_dead,labels}.npy for inspection (gitignored; no other code reads
+them, the methods recompute the detector): the final dead mask, the raw P(dead) per frame and
+the confident training labels (1 dead, 0 alive, -1 unknown).
+Feature computation takes 1-2 s on a compute node (minutes on the login node); the first and
+last lines report the seconds taken.
+
+How to read the output:
+  features: <n> columns           size of the per-frame feature table
+  confident labels                frames the rules call dead / alive for sure (training labels)
+  dead early                      mean dead share in the first 3 s after a set-piece tag start;
+                                  high is good
+  dead late                       mean dead share 10-20 s after the tag start; low is good
+  restarts found                  share of tags whose first 3 s are more than half dead
+  dead share of graded frames     how much of the match each detector calls dead
+  stretches, median, p90          number of dead stretches and their length in seconds
+  dead share where the ball ...   dead share on frames with the ball tracked / missing
+  speeding up                     share of dead stretches >= 3 s after which the players' mean
+                                  speed over the next 3 s is higher than over the last 3 s,
+                                  plus the median change in m/s; stretches are not split at
+                                  half ends
+  tagged restarts covered         restarts found again, for the full detector, which was trained
+                                  on them, so not a held-out number
 """
 
 import os
@@ -34,6 +59,16 @@ OUT_DIR = os.path.join(ROOT, "outputs", "dead")
 
 
 def restart_table(name, dead, starts):
+    """Print one line: how well the dead mask `dead` matches the restarts at `starts`.
+
+    `starts` are the frames where set-piece tags begin. Early is the mean dead share in the
+    first 3 s after each start (should be high), late the mean dead share 10-20 s after it
+    (should be low), found the share of starts whose first 3 s are more than half dead.
+
+        dead = np.zeros(1000, bool); dead[0:75] = True     # dead for the first 3 s only
+        restart_table("toy", dead, starts=[0, 500])
+        # prints "toy ... dead early 0.50   dead late 0.00   restarts found 50%"
+    """
     early = np.mean([dead[s + EARLY[0]:s + EARLY[1]].mean() for s in starts])
     late = np.mean([dead[s + LATE[0]:s + LATE[1]].mean() for s in starts])
     found = np.mean([dead[s + EARLY[0]:s + EARLY[1]].mean() > 0.5 for s in starts])
@@ -42,6 +77,11 @@ def restart_table(name, dead, starts):
 
 
 def main():
+    """Run both checks, print them (see the top of this file) and save the full detector.
+
+    Nothing is returned; the full detector's dead mask, P(dead) and confident labels are written
+    to outputs/dead/ as .npy files, one value per video frame.
+    """
     start_time = time.time()
     match = load(mmap=False)
     table = F.compute(match)

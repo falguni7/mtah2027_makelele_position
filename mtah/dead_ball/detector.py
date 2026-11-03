@@ -1,7 +1,14 @@
 """Dead-ball detector: which frames are stoppages (label D), without any human labels.
 
+    from mtah import features
+    from mtah.data import load
     from mtah.dead_ball import detect
-    dead, p_dead = detect(match, features)      # bool and probability per video frame
+    match = load()
+    table = features.compute(match)
+    dead, p_dead, labels = detect(match, table)   # bool, probability and label per video frame
+
+dead is what control_dead and baseline50_dead in mtah.methods treat as D; the temporal model
+(mtah.temporal.hmm) takes p_dead and labels instead, as the dead-ball evidence.
 
 Three stages:
 
@@ -15,10 +22,17 @@ Three stages:
   2. a classifier trained on those frames using PLAYER features and the ball-gap context, not
      the ball's speed or position, so it cannot just learn the rules back; alive examples inside
      short open-play gaps stop it from learning "ball missing = dead";
-  3. decode(): confident frames keep their label, the rest take the classifier's probability,
-     smoothed, with hysteresis and minimum durations so stoppages do not flicker.
+  3. decode(): confident DEAD frames are pinned dead; confident ALIVE frames only enter as
+     probability 0 before smoothing, so hysteresis and minimum durations can still turn them
+     dead. The rest take the classifier's probability, smoothed, with hysteresis and minimum
+     durations so stoppages do not flicker.
 
-The step-3 temporal model will replace stage 3; this is the first version.
+The temporal model (mtah/temporal/hmm.py) uses p_dead and the confident labels directly and does
+not use decode(); decode() is what control_dead and baseline50_dead in mtah.methods use.
+
+In this file: confident_labels (stage 1), train and predict (stage 2), drop_short and decode
+(stage 3) and detect, which runs all three. Labels are the ints DEAD = 1, ALIVE = 0 and
+UNKNOWN = -1; only graded frames (match.graded) are ever labelled or marked dead.
 """
 
 import numpy as np
@@ -57,7 +71,38 @@ MODEL = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, l2_regularizat
 
 
 def confident_labels(match, table, use_set_pieces=True, running_alive=True):
-    """int8 per frame: DEAD, ALIVE or UNKNOWN. Only graded frames get a label."""
+    """int8 per frame: DEAD, ALIVE or UNKNOWN. Only graded frames get a label.
+
+    Stage 1. match is the cached Match, which must have match.smart_tagging (it is required; a
+    match without tagging raises), table the feature table of mtah.features.compute. A
+    frame is DEAD if any dead rule fires, else ALIVE if any alive rule fires and it is not near
+    a tag, else UNKNOWN; DEAD wins over ALIVE.
+
+      dead    inside a GOALS tag, up to GOAL_END_TRIM (2 s) before its end (~ the kick-off);
+              the first SET_PIECE_DEAD (3 s) from a SET PIECES tag start, kick-offs excepted
+              (only if use_set_pieces); the second half from its first video frame up to
+              KICKOFF_2ND; the ball tracked out (ball_out) for at least OUT_MIN_FRAMES (0.5 s)
+      alive   the ball tracked, tracked for all of +/- 1.5 s, faster than ALIVE_BALL_SPEED and
+              more than ALIVE_LINE_DIST inside the pitch; a whole open-play ball gap (at most
+              GAP_ALIVE_MAX, every frame of the gap graded, at least 13 frames from both ends
+              of the match, both ends more than GAP_ALIVE_LINE_DIST inside and moving fast,
+              i.e. ball_speed_1s above ALIVE_BALL_SPEED 13 frames before the gap and 13 frames
+              after it, players' median speed over GAP_ALIVE_TEAM_SPEED); sustained running
+              (speed_mean_3s above RUN_ALIVE_SPEED and run_share_3s above RUN_ALIVE_SHARE, if
+              running_alive)
+      near a tag   from 5 s before to 10 s after a SET PIECES tag start, or from 5 s before
+              the start to 10 s after the end of a GOALS tag; never ALIVE
+
+    Toy frames, all graded and far from any tag:
+
+        ball tracked, 20 m inside, moving 8 m/s for 3 s          -> ALIVE
+        ball tracked 3 m behind the goal line for 1 s            -> DEAD
+        ball lost 2 s at midfield, seen moving fast either side,
+            players jogging at 3 m/s                             -> ALIVE (whole gap)
+        ball lost 30 s, players walking                          -> UNKNOWN
+        1 s after the start of a corner (SET PIECES) tag         -> DEAD
+        8 s after it, ball moving fast inside the pitch          -> UNKNOWN (near the tag)
+    """
     n = match.n_frames
     labels = np.full(n, UNKNOWN, dtype=np.int8)
     graded = np.asarray(match.graded)
@@ -124,7 +169,16 @@ COLUMNS = F.PLAYER + GAP_TIMING + GAP_ENDS
 
 
 def train(table, labels, columns=COLUMNS):
-    """Classifier for P(dead) on confident frames, every TRAIN_STRIDE-th one."""
+    """Classifier for P(dead) on confident frames, every TRAIN_STRIDE-th one.
+
+    Stage 2. Fits a gradient-boosted tree classifier (settings in MODEL) on the given feature
+    columns of the frames labelled DEAD or ALIVE by confident_labels, target "is DEAD". Only
+    every TRAIN_STRIDE-th (5th) confident frame is used, as neighbouring frames are nearly
+    identical. Returns the fitted model for predict.
+
+        labels = [U, D, D, D, D, D, D, A, A, A, A, A]     # U = UNKNOWN
+        # confident frames 1..11, training rows 1, 6, 11 -> targets True, True, False
+    """
     rows = np.flatnonzero(labels != UNKNOWN)[::TRAIN_STRIDE]
     model = HistGradientBoostingClassifier(**MODEL)
     model.fit(table.iloc[rows][columns].to_numpy(), labels[rows] == DEAD)
@@ -132,11 +186,27 @@ def train(table, labels, columns=COLUMNS):
 
 
 def predict(model, table, columns=COLUMNS):
+    """P(dead) per frame from the trained classifier, as float32.
+
+    Every row of table is scored, confident frames included, with the same columns the model
+    was trained on. Values are 0..1; decode turns them into the dead mask.
+
+        p_dead = predict(model, table)       # e.g. [0.02, 0.05, 0.91, ...], one per frame
+    """
     return model.predict_proba(table[columns].to_numpy())[:, 1].astype(np.float32)
 
 
 def drop_short(mask, value, min_length):
-    """Flip runs of `value` shorter than min_length to the other value."""
+    """Flip runs of `value` shorter than min_length to the other value.
+
+    mask is a boolean array per frame; every stretch of consecutive `value` frames lasting fewer
+    than min_length frames is set to `not value`, longer ones are kept. Returns a new array.
+    decode uses it to drop stoppages under MIN_DEAD and play bursts under MIN_ALIVE.
+
+        mask = [T, T, F, T, T, T, F, F]
+        drop_short(mask, True, 3)            # -> [F, F, F, T, T, T, F, F]
+        drop_short(mask, False, 2)           # -> [T, T, T, T, T, T, F, F]
+    """
     out = mask.copy()
     for start, stop in runs_of(out == value):
         if stop - start < min_length:
@@ -145,7 +215,18 @@ def drop_short(mask, value, min_length):
 
 
 def decode(p_dead, labels, graded):
-    """Dead mask from probabilities: confident frames pinned, smoothed, hysteresis, durations."""
+    """Dead mask from probabilities: confident frames pinned, smoothed, hysteresis, durations.
+
+    Stage 3. p_dead is the classifier's probability per frame, labels the confident labels,
+    graded the graded-frame mask. Steps: set confident DEAD frames to 1 and ALIVE to 0; average
+    over +/- SMOOTH (1 s); walk the graded frames and switch to dead when the smoothed value
+    goes above ENTER (0.6), back to alive when it goes below LEAVE (0.4); drop dead stretches
+    shorter than MIN_DEAD (2 s), then alive stretches shorter than MIN_ALIVE (1 s); finally
+    every confident DEAD frame is dead again. Returns a bool mask, False off the graded frames.
+
+        smoothed p = [0.5, 0.7, 0.5, 0.45, 0.3]          # ignoring the duration rules
+        dead       = [F,   T,   T,   T,    F]            # stays dead until p < 0.4
+    """
     p = p_dead.astype(np.float64).copy()
     p[labels == DEAD] = 1.0
     p[labels == ALIVE] = 0.0
@@ -166,7 +247,19 @@ def decode(p_dead, labels, graded):
 
 
 def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=True):
-    """(dead mask, raw P(dead), confident labels) for every video frame."""
+    """(dead mask, raw P(dead), confident labels) for every video frame.
+
+    The whole detector: confident_labels, train, predict, decode. match is the cached Match
+    (match.smart_tagging must be present; a match without tagging raises), table the feature
+    table of mtah.features.compute; use_set_pieces and running_alive switch those
+    confident-label rules, columns picks the classifier inputs. Returns a bool array
+    (dead = D), a float32 array of the classifier's P(dead) before decoding and the int8
+    labels, all of length n_frames.
+
+        dead, p_dead, labels = detect(match, table)
+        dead.mean()                          # share of frames called dead
+        detect(match, table, use_set_pieces=False)   # without the set-piece rule
+    """
     labels = confident_labels(match, table, use_set_pieces, running_alive)
     model = train(table, labels, columns)
     p_dead = predict(model, table, columns)
