@@ -10,7 +10,8 @@ Three stages:
        dead   a goal until its kick-off (GOALS tags), the second half before its kick-off,
               the ball tracked out of the pitch, and the first seconds of a tagged set piece
               (the restart comes ~5 s after the tag start)
-       alive  the ball tracked for 3 s and moving inside the pitch, away from any tag
+       alive  the ball tracked for 3 s and moving inside the pitch, away from any tag, and
+              sustained running by the players, ball tracked or not
   2. a classifier trained on those frames using PLAYER features and the ball-gap context, not
      the ball's speed or position, so it cannot just learn the rules back; alive examples inside
      short open-play gaps stop it from learning "ball missing = dead";
@@ -40,6 +41,10 @@ ALIVE_LINE_DIST = 2.0               # metres inside the pitch
 GAP_ALIVE_MAX = 15 * FPS            # gap no longer than this
 GAP_ALIVE_LINE_DIST = 5.0           # ball last seen and reappearing this far inside the pitch
 GAP_ALIVE_TEAM_SPEED = 1.5          # m/s, median over the gap
+# Sustained running means play is on, ball tracked or not (a stoppage is walked through, and goal
+# celebrations are covered by the GOALS tags, which win). Alive examples inside long gaps too.
+RUN_ALIVE_SPEED = 2.0               # m/s, team mean over 3 s
+RUN_ALIVE_SHARE = 0.12              # share of players above 4 m/s, over 3 s
 TRAIN_STRIDE = 5                    # every 5th confident frame: neighbours are near-duplicates
 SMOOTH = FPS                        # +/- 1 s mean of the probability
 ENTER, LEAVE = 0.6, 0.4             # hysteresis thresholds on the smoothed probability
@@ -51,7 +56,7 @@ MODEL = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, l2_regularizat
              random_state=0)
 
 
-def confident_labels(match, table, use_set_pieces=True):
+def confident_labels(match, table, use_set_pieces=True, running_alive=True):
     """int8 per frame: DEAD, ALIVE or UNKNOWN. Only graded frames get a label."""
     n = match.n_frames
     labels = np.full(n, UNKNOWN, dtype=np.int8)
@@ -102,6 +107,10 @@ def confident_labels(match, table, use_set_pieces=True):
                 GAP_ALIVE_TEAM_SPEED:
             alive[start:stop] = True
 
+    if running_alive:
+        alive |= ((table["speed_mean_3s"].to_numpy() > RUN_ALIVE_SPEED)
+                  & (table["run_share_3s"].to_numpy() > RUN_ALIVE_SHARE))
+
     labels[graded & alive & ~near_tag] = ALIVE
     labels[graded & dead] = DEAD
     return labels
@@ -109,8 +118,9 @@ def confident_labels(match, table, use_set_pieces=True):
 
 # Classifier inputs: how the players move, plus where the current ball gap starts and ends. Not
 # the ball's speed or position, which define the labels.
-COLUMNS = F.PLAYER + ["gap_length", "since_seen", "until_seen", "last_seen_line_dist",
-                      "next_seen_line_dist"]
+GAP_TIMING = ["gap_length", "since_seen", "until_seen"]
+GAP_ENDS = ["last_seen_line_dist", "next_seen_line_dist"]
+COLUMNS = F.PLAYER + GAP_TIMING + GAP_ENDS
 
 
 def train(table, labels, columns=COLUMNS):
@@ -155,9 +165,9 @@ def decode(p_dead, labels, graded):
     return dead & graded
 
 
-def detect(match, table, use_set_pieces=True):
+def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=True):
     """(dead mask, raw P(dead), confident labels) for every video frame."""
-    labels = confident_labels(match, table, use_set_pieces)
-    model = train(table, labels)
-    p_dead = predict(model, table)
+    labels = confident_labels(match, table, use_set_pieces, running_alive)
+    model = train(table, labels, columns)
+    p_dead = predict(model, table, columns)
     return decode(p_dead, labels, np.asarray(match.graded)), p_dead, labels
