@@ -8,20 +8,24 @@ the ball, so it can fill ball gaps. It is trained on pseudo-labels from the step
 frames inside a control event and passes between two events of the same team. Nothing is
 written to disk.
 
-1. Held-out accuracy on the pseudo-labels, per contiguous time block (out-of-fold).
+1. Held-out accuracy on the pseudo-labels (out-of-fold over contiguous time blocks), for each
+   feature set in FEATURE_SETS: the step-4 features, each of ideas 9 and 10 added alone, and all.
 2. Where it matters -- frames at least 2 s from any control event, i.e. inside ball gaps and
    long loose phases -- agreement with Smart Tagging's in-possession team for: the carry rule
-   (control_dead), the shape model on its own, and hmm_v2. Smart Tagging's in-possession
-   phases are not used by any of them (the dead-ball detector does use the SET PIECES and GOALS
-   tags), so the comparison is independent of what it measures; an opinion, not ground truth.
+   (control_dead), the shape model on its own with each feature set, hmm_v2 and hmm_v3. Smart
+   Tagging's in-possession phases are not used by any of them (the dead-ball detector does use
+   the SET PIECES and GOALS tags), so the comparison is independent of what it measures; an
+   opinion, not ground truth.
 
 How to read the output:
   pseudo-labels        frames with a pseudo-label, their share of graded frames, and the share
                        of them where the home team has the ball
-  block table          per time block: block number, labelled frames in it, held-out accuracy
-                       (P(home) > 0.5 against the pseudo-label), home share in that block
-  overall              held-out accuracy on all labelled frames; majority class is the accuracy
-                       of always guessing the more common team, the number to beat
+  feature set row      number of features; overall held-out accuracy (P(home) > 0.5 against
+                       the pseudo-label) on all labelled frames; the accuracy of the worst time
+                       block; majority class is the accuracy of always guessing the more common
+                       team, the number to beat
+  block table          for all features: per time block, labelled frames in it, held-out
+                       accuracy, home share in that block
   confidence a-b       frames whose max(P(home), P(away)) lies in [a, b): their share of the
                        labelled frames and the accuracy there; accuracy should rise with
                        confidence
@@ -66,38 +70,55 @@ def agreement_on(labels, tagged, frames):
             float(((labels != tagged[covered]) & (labels != "D")).mean()))
 
 
+# Shape feature sets compared in part 1: the step-4 set, each idea added on its own, and all.
+FEATURE_SETS = {
+    "v1 (step 4)": team_shape.COLUMNS_V1,
+    "v1 + approach, marking_rate (idea 9)": team_shape.columns_of(
+        team_shape.PER_TEAM_V1 + ["approach", "marking_rate"]),
+    "v1 + depth, hull_area (idea 10)": team_shape.columns_of(
+        team_shape.PER_TEAM_V1 + ["depth", "hull_area"]),
+    "all (hmm_v3)": team_shape.COLUMNS,
+}
+
+
 if __name__ == '__main__':
     match = load(mmap=False)
     events = control_events(match)
     target = shape_model.pseudo_labels(match, events)
     table = team_shape.compute(match)
-    p_home, report = shape_model.out_of_fold(table, target, match.graded)
-
     labelled = target >= 0
     print("pseudo-labels: {} frames ({:.1%} of graded), home share {:.2f}".format(
         int(labelled.sum()), labelled[np.asarray(match.graded)].mean(), target[labelled].mean()))
-    print("\n1. held-out accuracy by time block")
-    print(pd.DataFrame(report).set_index("block").round(3).to_string())
-    held = labelled & np.isfinite(p_home)
-    print("  overall {:.3f} (majority class {:.3f})".format(
-        ((p_home[held] > 0.5) == target[held]).mean(), max(target[held].mean(), 1 - target[held].mean())))
-    for low, high in ((0.5, 0.6), (0.6, 0.75), (0.75, 0.9), (0.9, 1.01)):
+
+    print("\n1. held-out accuracy per feature set")
+    p_by_set = {}
+    for set_name, columns in FEATURE_SETS.items():
+        p_home, report = shape_model.out_of_fold(table, target, match.graded, columns)
+        p_by_set[set_name] = p_home
+        held = labelled & np.isfinite(p_home)
+        blocks = pd.DataFrame(report)["accuracy"]
+        print("  {:<38} {:>3} features  overall {:.3f}  worst block {:.3f}  (majority class {:.3f})"
+              .format(set_name, len(columns), ((p_home[held] > 0.5) == target[held]).mean(),
+                      blocks.min(), max(target[held].mean(), 1 - target[held].mean())))
         confidence = np.maximum(p_home, 1 - p_home)
-        sel = held & (confidence >= low) & (confidence < high)
-        print("  confidence {:.2f}-{:.2f}: {:5.1%} of labelled frames, accuracy {:.3f}".format(
-            low, high, sel.sum() / held.sum(), ((p_home[sel] > 0.5) == target[sel]).mean()))
+        for low, high in ((0.5, 0.6), (0.6, 0.75), (0.75, 0.9), (0.9, 1.01)):
+            sel = held & (confidence >= low) & (confidence < high)
+            print("      confidence {:.2f}-{:.2f}: {:5.1%} of labelled frames, accuracy {:.3f}".format(
+                low, high, sel.sum() / held.sum(), ((p_home[sel] > 0.5) == target[sel]).mean()))
+    print("  by time block, all features:")
+    print(pd.DataFrame(report).set_index("block").round(3).to_string())
 
     print("\n2. far from control events (>= 2 s): agreement with Smart Tagging")
     tagged = tagging.phase_team(match)
     far = shape_model.gap_frames(match, events)
     ball_missing = ~np.asarray(match.ball_present)
-    shape_only = np.where(p_home > 0.5, "H", "A")
-    candidates = (("carry rule (control_dead)", METHODS["control_dead"](match)),
-                  ("shape model alone", shape_only),
-                  ("hmm_v2", METHODS["hmm_v2"](match)))
+    candidates = [("carry rule (control_dead)", METHODS["control_dead"](match))]
+    candidates += [("shape alone, " + set_name, np.where(p > 0.5, "H", "A"))
+                   for set_name, p in p_by_set.items()]
+    candidates += [("hmm_v2", METHODS["hmm_v2"](match)), ("hmm_v3", METHODS["hmm_v3"](match))]
     for frames_name, frames in (("all far frames", far), ("far and ball missing", far & ball_missing)):
         print("  {} ({} graded frames)".format(frames_name, int(frames.sum())))
         for name, labels in candidates:
             n, agree, disagree = agreement_on(labels, tagged, frames)
-            print("    {:<28} tagged frames {:>6}  agree {:.3f}  disagree {:.3f}".format(
+            print("    {:<52} tagged frames {:>6}  agree {:.3f}  disagree {:.3f}".format(
                 name, n, agree, disagree))

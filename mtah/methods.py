@@ -16,6 +16,7 @@ The methods follow the roadmap steps:
     control_dead       step 2: control events decide the team, step-1 detector decides D
     hmm_v1             step 3: control events and dead-ball probability decoded with Viterbi
     hmm_v2             step 4: hmm_v1 plus the ball-free team-shape model in the gaps
+    hmm_v3             hmm_v2 with the extra shape features (pressing, compactness: ideas 9, 10)
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -122,7 +123,7 @@ def hmm_v1():
     return method
 
 
-def shape_evidence(match, events):
+def shape_evidence(match, events, columns=None):
     """Step 4: out-of-fold P(home) from the ball-free shape model, and the frames to use it on.
 
     The shape model guesses who has the ball from where the players stand (team shape), without
@@ -132,6 +133,7 @@ def shape_evidence(match, events):
     is a per-frame P(home in possession), NaN where there is no prediction, and frames is a bool
     mask of the graded frames far enough from any control event that the shape is the only team
     evidence there besides the temporal model's carry bias (mtah.possession.shape_model.gap_frames).
+    columns picks the shape features the model uses (default: all of team_shape.COLUMNS).
 
         events = [(100, 120, 0), (900, 910, 1)]        # (start, stop, team)
         p_home, frames = shape_evidence(match, events)
@@ -141,21 +143,28 @@ def shape_evidence(match, events):
     from mtah.features import team_shape
     from mtah.possession import shape_model
     target = shape_model.pseudo_labels(match, events)
-    p_home, _ = shape_model.out_of_fold(team_shape.compute(match), target, match.graded)
+    columns = team_shape.COLUMNS if columns is None else columns
+    p_home, _ = shape_model.out_of_fold(team_shape.compute(match), target, match.graded, columns)
     return p_home, shape_model.gap_frames(match, events)
 
 
-def hmm_v2():
+def hmm_v2(version=2):
     """Step 4: hmm_v1 plus team evidence from the shape model away from control events.
 
     Factory: returns the method named "hmm_v2". Same Viterbi decoding as hmm_v1, but in long
     stretches with no control event (mostly ball gaps) the shape model's P(home) is added as
     evidence for which team has the ball, instead of leaving the decoder to carry the last team.
+    version=2 uses the original step-4 shape features (team_shape.COLUMNS_V1); version=3 adds
+    depth, hull area, approach and marking rate (team_shape.COLUMNS) and is named "hmm_v3".
 
         method = hmm_v2()
         method.__name__                        # -> "hmm_v2"
+        hmm_v2(version=3).__name__             # -> "hmm_v3"
         labels = method(match)                 # (n_frames,) of "H" / "A" / "D"
     """
+    from mtah.features import team_shape
+    columns = {2: team_shape.COLUMNS_V1, 3: team_shape.COLUMNS}[version]
+
     def method(match):
         """Labels for one match: hmm_v1's decoding plus shape-model evidence in the gaps.
 
@@ -169,9 +178,9 @@ def hmm_v2():
         from mtah.temporal.hmm import decode
         _, p_dead, dead_labels = dead_ball.detect(match, features.compute(match))
         events = control_events(match)
-        p_home, frames = shape_evidence(match, events)
+        p_home, frames = shape_evidence(match, events, columns)
         return decode(match, events, p_dead, dead_labels, p_home, frames)
-    method.__name__ = "hmm_v2"
+    method.__name__ = "hmm_v{}".format(version)
     return method
 
 
@@ -192,4 +201,5 @@ METHODS = {
     "control_dead": control_dead(),
     "hmm_v1": hmm_v1(),
     "hmm_v2": hmm_v2(),
+    "hmm_v3": hmm_v2(version=3),
 }

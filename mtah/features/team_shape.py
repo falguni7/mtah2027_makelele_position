@@ -23,6 +23,16 @@ over 1 s (centred, +/- SMOOTH = 12 frames, i.e. +/- 0.5 s):
   speed         mean speed (m/s)
   marking       mean distance from each player to the nearest opponent (m)
   near_camera   players within NEAR_CAMERA metres of the camera's pitch point
+  depth         front minus back: how far the attacking front is from the defensive line (m)
+  hull_area     area of the outline around the outfield players (m^2), small when compact
+  approach      mean speed of each player towards their nearest opponent (m/s); > 0 closing
+                in, as when pressing, < 0 moving away from them, as when finding space
+  marking_rate  how fast marking changes (m/s, from the smoothed marking); < 0 the team is
+                getting closer to its opponents, > 0 further away
+
+The last four were added later (ideas 9 and 10: a team closing in on its opponents and staying
+compact is likely defending, one moving away and spreading out is likely in possession). The
+step-4 method hmm_v2 keeps the original set, COLUMNS_V1; hmm_v3 uses all COLUMNS.
 
 Camera: the image centre projected onto the pitch, as the home team's oriented position along the
 length (camera_advance_h) and the distance from the long axis (camera_y).
@@ -42,6 +52,8 @@ team's raw features) and compute (both teams, the differences and the camera, sm
 import numpy as np
 import pandas as pd
 
+from scipy.spatial import ConvexHull, QhullError
+
 from mtah.utils import centred
 
 # Params
@@ -50,10 +62,23 @@ SMOOTH = FPS // 2
 NEAR_CAMERA = 15.0
 IMAGE_CENTRE = (960.0, 540.0)
 VELOCITY_HALF = 2
-PER_TEAM = ["advance", "front", "back", "spread_x", "spread_y", "forward_vel", "speed",
-            "marking", "near_camera"]
-COLUMNS = ([name + "_h" for name in PER_TEAM] + [name + "_a" for name in PER_TEAM]
-           + [name + "_diff" for name in PER_TEAM] + ["camera_advance_h", "camera_y"])
+PER_TEAM_V1 = ["advance", "front", "back", "spread_x", "spread_y", "forward_vel", "speed",
+               "marking", "near_camera"]
+PER_TEAM = PER_TEAM_V1 + ["depth", "hull_area", "approach", "marking_rate"]
+
+
+def columns_of(per_team):
+    """Table column names for a list of per-team features: _h, _a, _diff of each, then camera.
+
+        columns_of(["advance"])
+        # -> ["advance_h", "advance_a", "advance_diff", "camera_advance_h", "camera_y"]
+    """
+    return ([name + "_h" for name in per_team] + [name + "_a" for name in per_team]
+            + [name + "_diff" for name in per_team] + ["camera_advance_h", "camera_y"])
+
+
+COLUMNS_V1 = columns_of(PER_TEAM_V1)      # the step-4 feature set (hmm_v2)
+COLUMNS = columns_of(PER_TEAM)            # everything compute() returns (hmm_v3)
 
 
 def home_direction(match):
@@ -116,6 +141,28 @@ def velocity(positions):
     return out
 
 
+def hull_area(xy):
+    """Area (m^2) of the convex hull of each frame's points; NaN with fewer than 3 points.
+
+    xy is (n_frames, k, 2) with NaN rows for absent players. The convex hull is the outline you
+    get by stretching a rubber band around all the players: a compact defensive block has a
+    small one, a team spread across the pitch a large one. Points all on one line give 0.
+
+        one frame, players at (0, 0), (10, 0), (0, 10), (2, 2)
+        hull_area(xy)                          # -> [50.0]   the (2, 2) player is inside
+    """
+    out = np.full(len(xy), np.nan)
+    for i, points in enumerate(xy):
+        points = points[np.isfinite(points).all(axis=1)]
+        if len(points) < 3:
+            continue
+        try:
+            out[i] = ConvexHull(points).volume       # in 2-D, "volume" is the area
+        except QhullError:                           # all on one line (or one point)
+            out[i] = 0.0
+    return out
+
+
 def team_columns(xy, present, speed, sign, opponents_xy, camera):
     """Per-team raw (unsmoothed) features. x is relative to halfway; sign is +1 / -1 / 0 per frame,
     the team's attacking direction.
@@ -124,7 +171,8 @@ def team_columns(xy, present, speed, sign, opponents_xy, camera):
     (n, m, 2) is every opposing player, NaN where absent; camera (n, 2) is camera_point, also
     relative to halfway. Returns a dict {name in PER_TEAM: (n,) float array}, the quantities in
     the module docstring for this one team, before the +/- 0.5 s (1 s wide) smoothing. near_camera
-    is a count, so it is 0 rather than NaN where there is no camera point.
+    is a count, so it is 0 rather than NaN where there is no camera point. marking_rate is not
+    here: compute() takes it from the smoothed marking.
 
     Toy frame, team attacking right (sign = +1), three outfield players at x = -10, 0, 20:
 
@@ -132,7 +180,10 @@ def team_columns(xy, present, speed, sign, opponents_xy, camera):
         front     -> 16.0     90th percentile
         back      -> -8.0     10th percentile
         spread_x  -> 12.47    standard deviation
+        depth     -> 24.0     front - back
         # the same players with sign = -1 give advance -3.33, front 8.0, back -16.0
+        # a player at (0, 0) running at (+2, 0) m/s, the nearest opponent at (5, 0):
+        #     approach 2.0 for that player (straight at the opponent); at (0, +2) -> ~0.0
     """
     x = np.where(present, xy[:, :, 0], np.nan)
     y = np.where(present, xy[:, :, 1], np.nan)
@@ -141,18 +192,30 @@ def team_columns(xy, present, speed, sign, opponents_xy, camera):
     with np.errstate(invalid="ignore"):
         dx = x[:, :, None] - opponents_xy[:, None, :, 0]
         dy = y[:, :, None] - opponents_xy[:, None, :, 1]
-        nearest = np.sqrt(np.nanmin(dx * dx + dy * dy, axis=2))
+        squared = np.where(np.isfinite(dx * dy), dx * dx + dy * dy, np.inf)
+        closest = squared.argmin(axis=2)[:, :, None]
+        nearest = np.sqrt(np.take_along_axis(squared, closest, axis=2)[:, :, 0])
+        nearest[~np.isfinite(nearest)] = np.nan
+        # unit vector from each player to the nearest opponent, and the player's speed along it
+        to_x = -np.take_along_axis(dx, closest, axis=2)[:, :, 0] / nearest
+        to_y = -np.take_along_axis(dy, closest, axis=2)[:, :, 0] / nearest
+        approach = vel[:, :, 0] * to_x + vel[:, :, 1] * to_y
+        front = np.nanpercentile(oriented, 90, axis=1)
+        back = np.nanpercentile(oriented, 10, axis=1)
         near_camera = (np.hypot(x - camera[:, 0:1], y - camera[:, 1:2]) < NEAR_CAMERA).sum(axis=1)
         out = {
             "advance": np.nanmean(oriented, axis=1),
-            "front": np.nanpercentile(oriented, 90, axis=1),
-            "back": np.nanpercentile(oriented, 10, axis=1),
+            "front": front,
+            "back": back,
             "spread_x": np.nanstd(x, axis=1),
             "spread_y": np.nanstd(y, axis=1),
             "forward_vel": np.nanmean(vel[:, :, 0] * sign[:, None], axis=1),
             "speed": np.nanmean(np.where(present, speed, np.nan), axis=1),
             "marking": np.nanmean(nearest, axis=1),
             "near_camera": near_camera.astype(np.float64),
+            "depth": front - back,
+            "hull_area": hull_area(np.stack([x, y], axis=2)),
+            "approach": np.nanmean(approach, axis=1),
         }
     return out
 
@@ -162,7 +225,8 @@ def compute(match):
 
     For one Match: team_columns for home (_h) and away (_a), each oriented by its own attacking
     direction and averaged over +/- SMOOTH frames (+/- 0.5 s), then home minus away (_diff), and
-    the two camera columns. Row i is video frame i. Off the two graded halves the direction
+    the two camera columns. marking_rate is the rate of change of the smoothed marking, over
+    +/- VELOCITY_HALF frames. Row i is video frame i. Off the two graded halves the direction
     sign is 0, so advance, front, back, forward_vel and camera_advance_h are 0 there (not NaN);
     near_camera is 0 where the homography is invalid.
 
@@ -190,6 +254,7 @@ def compute(match):
         raw = team_columns(xy[:, mine], present[:, mine], speed[:, mine], sign, opponents, camera)
         for name, values in raw.items():
             columns[name + suffix] = centred(values, SMOOTH)
+        columns["marking_rate" + suffix] = velocity(columns["marking" + suffix])
     for name in PER_TEAM:
         columns[name + "_diff"] = columns[name + "_h"] - columns[name + "_a"]
     columns["camera_advance_h"] = centred(camera[:, 0] * sign_h, SMOOTH)

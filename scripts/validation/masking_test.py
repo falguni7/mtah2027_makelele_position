@@ -5,6 +5,9 @@
     python scripts/validation/masking_test.py --reference outputs/best.csv   # fixed reference
     sbatch scripts/slurm/run.sbatch scripts/validation/masking_test.py --methods hmm_v2
 
+A --by-length run of one hmm method takes ~30-40 min on a compute node; for several methods
+pass a longer limit to sbatch (sbatch --time=02:00:00 scripts/slurm/run.sbatch ...).
+
 The ball is hidden on blocks of frames where it IS tracked, each method is run on the masked
 match, and its output is scored against a reference on windows around the blocks (block +/-
 10 s) with the official scorer. Nothing is written to disk.
