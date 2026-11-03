@@ -75,8 +75,7 @@ def player_features(match):
     Takes a Match and returns a dict {column name: float array of n_frames}, in PLAYER order.
     Every present player counts, both teams and goalkeepers included. "+/- 0.5 s" etc. is the
     centred mean of the per-frame value over that window. On a frame without players the speed
-    and position values are NaN and the counts 0, before smoothing; own_half_share is 0.0 there
-    (not NaN) if the frame is inside a half, NaN only off the halves.
+    and position values (own_half_share included) are NaN and the counts 0, before smoothing.
 
         n_players               players present on the frame (count, not smoothed)
         speed_mean              mean player speed on the frame (m/s), over players with a speed
@@ -93,8 +92,8 @@ def player_features(match):
         n_outside               players more than OUT_MARGIN outside any line, +/- 0.5 s
         n_in_boxes              players inside either penalty box, +/- 0.5 s
         own_half_share          share of players in their own half, +/- 0.5 s (0..1); 1.0 at a
-                                kick-off; 0.0 on a frame inside a half with no
-                                tracked players, NaN only outside the two halves
+                                kick-off; NaN on frames with no tracked players and
+                                outside the two halves
 
     Toy frame for own_half_share, length 105 so halfway is x = 52.5, home attacks right:
 
@@ -137,7 +136,8 @@ def player_features(match):
         frames = np.asarray(match.half) == number
         home_own = x[frames] < length / 2 if right else x[frames] > length / 2
         own = np.where(home, home_own, ~home_own) & present[frames]
-        own_half[frames] = own.sum(axis=1) / np.maximum(present[frames].sum(axis=1), 1)
+        counted = present[frames].sum(axis=1)
+        own_half[frames] = np.where(counted > 0, own.sum(axis=1) / np.maximum(counted, 1), np.nan)
 
     three = 3 * FPS
     past = rolling_mean(speed_mean, three, -1)

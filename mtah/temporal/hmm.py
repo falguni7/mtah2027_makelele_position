@@ -97,7 +97,11 @@ def emissions(n, events, p_dead, dead_labels, graded, p_home=None, shape_frames=
     event_start = np.full(n, -1, dtype=np.int8)
     for start, stop, team in events:
         in_event[start:stop] = team
-        event_start[start] = team
+        # An event counts from its first frame that is not pinned dead: a restart taken while the
+        # stoppage is still called changes the carried team where play resumes.
+        inside = np.flatnonzero(~pinned_dead[start:stop])
+        if len(inside):
+            event_start[start + inside[0]] = team
     for team in (H, A):
         rows = in_event == team
         score[rows, 1 - team] -= EVENT_COST

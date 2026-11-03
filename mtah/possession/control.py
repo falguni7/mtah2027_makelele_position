@@ -147,10 +147,13 @@ def possession_from_events(events, graded, dead=None):
 
     Each alive stretch (graded, not dead) is filled from its own events only: before its first
     event it takes that event's team (the restart), after the last one it keeps the last team.
-    An alive stretch with no event at all gets the team of the previous stretch, else "D".
-    events are (start, stop, team) as from control_events(); only their start frames matter, and
-    an event starting on a dead or ungraded frame is ignored. graded and dead are bool masks per
-    frame (dead None: no stoppages). Dead and ungraded frames are "D".
+    An alive stretch with no event at all gets the team of the previous stretch in the same
+    graded half, else "D"; nothing carries across half-time. events are (start, stop, team) as
+    from control_events(); an event counts from its first alive frame, so one that starts on a
+    dead frame and runs into play (a restart taken while the stoppage is still called) changes
+    possession where play resumes, and one entirely on dead or ungraded frames is ignored. graded
+    and dead are bool masks per frame (dead None: no stoppages). Dead and ungraded frames are
+    "D".
 
         events = [(1, 3, 1), (7, 9, 0)]        # away in control at 1-2, home at 7-8
         graded = [T] * 10
@@ -161,22 +164,28 @@ def possession_from_events(events, graded, dead=None):
         # -> ["A", "A", "A", "A", "A", "A", "A", "H", "H", "H"]
     """
     n = len(graded)
-    dead = np.zeros(n, dtype=bool) if dead is None else np.asarray(dead)
+    graded = np.asarray(graded, dtype=bool)
+    dead = np.zeros(n, dtype=bool) if dead is None else np.asarray(dead, dtype=bool)
+    alive = graded & ~dead
     code = np.full(n, -1, dtype=np.int8)
-    for start, _, team in events:
-        code[start] = team
+    for start, stop, team in events:
+        inside = np.flatnonzero(alive[start:stop])
+        if len(inside):
+            code[start + inside[0]] = team
     labels = np.full(n, "D", dtype="<U1")
-    previous = -1
-    for start, stop in runs_of(np.asarray(graded) & ~dead):
-        window = code[start:stop]
-        known = np.flatnonzero(window >= 0)
-        if not len(known):
-            if previous >= 0:
-                labels[start:stop] = "HA"[previous]
-            continue
-        carry = np.maximum.accumulate(np.where(window >= 0, np.arange(len(window)), -1))
-        carry[carry < 0] = known[0]
-        filled = window[carry]
-        labels[start:stop] = np.where(filled == 0, "H", "A")
-        previous = int(filled[-1])
+    for half_start, half_stop in runs_of(graded):
+        previous = -1
+        for a, b in runs_of(alive[half_start:half_stop]):
+            start, stop = half_start + a, half_start + b
+            window = code[start:stop]
+            known = np.flatnonzero(window >= 0)
+            if not len(known):
+                if previous >= 0:
+                    labels[start:stop] = "HA"[previous]
+                continue
+            carry = np.maximum.accumulate(np.where(window >= 0, np.arange(len(window)), -1))
+            carry[carry < 0] = known[0]
+            filled = window[carry]
+            labels[start:stop] = np.where(filled == 0, "H", "A")
+            previous = int(filled[-1])
     return labels

@@ -175,6 +175,12 @@ def hmm_v2():
     return method
 
 
+# The official baselines ship as git-tracked files evaluation/results/<name>.csv, and
+# scripts/data/check_cache.py compares the cache against them. Scripts never write over them.
+OFFICIAL_BASELINES = frozenset({"baseline_raw", "baseline_smooth25", "baseline_smooth50",
+                                "baseline_smooth125"})
+
+
 # Every method by name. Scripts look methods up here (e.g. METHODS["hmm_v2"](match)); the key
 # matches the method's __name__.
 METHODS = {

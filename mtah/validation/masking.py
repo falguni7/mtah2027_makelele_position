@@ -67,10 +67,11 @@ def sample_blocks(match, lengths, rng, min_present=MIN_PRESENT, margin=MARGIN):
     does not overlap another block's window. Longest first, since they are the hardest to place.
 
     rng is a numpy Generator (np.random.default_rng), so a seed gives the same blocks every
-    time. Each block is a half-open (start, stop) frame range, returned sorted by start. A length
-    may get no block: after MAX_ATTEMPTS random placements, or at once if the half drawn for it is
-    too short to hold it with the margins, it is skipped, so fewer blocks than lengths can come
-    back.
+    time. Each block is a half-open (start, stop) frame range, returned sorted by start. The
+    half is drawn among those long enough, in proportion to their free room. A length may still
+    get no block: if no half can hold it with the margins, or after MAX_ATTEMPTS placements that
+    overlap other blocks or lack the ball, it is skipped, so fewer blocks than lengths can come
+    back (the masked_frames column shows how much was masked).
 
         lengths = [50, 200]                      # e.g. from real_gap_lengths()
         sample_blocks(match, lengths, np.random.default_rng(0), margin=250)
@@ -81,11 +82,15 @@ def sample_blocks(match, lengths, rng, min_present=MIN_PRESENT, margin=MARGIN):
     taken = np.zeros(match.n_frames, dtype=bool)
     blocks = []
     for length in sorted((int(x) for x in lengths), reverse=True):
+        # Only halves long enough for this block, drawn in proportion to the room they have, so
+        # every possible start position is equally likely.
+        room = np.array([max(0, stop - start - 2 * margin - length) for start, stop in halves],
+                        dtype=np.float64)
+        if not room.any():
+            continue
         for _ in range(MAX_ATTEMPTS):
-            half_start, half_stop = halves[rng.integers(len(halves))]
+            half_start, half_stop = halves[rng.choice(len(halves), p=room / room.sum())]
             low, high = half_start + margin, half_stop - margin - length
-            if high <= low:
-                break
             start = int(rng.integers(low, high))
             stop = start + length
             if taken[start - margin:stop + margin].any():

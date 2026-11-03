@@ -6,8 +6,8 @@
 Each variant (VARIANTS below) is the detector of mtah/dead_ball/detector.py with different
 feature columns and with or without the "sustained running counts as alive" labels. Each one is
 trained twice (without and with the set-piece labels) and then fed to the step-4 decoder.
-The variant labelled "v1c current" is the step-1 detector (running_alive=False); the detector
-now used by all methods is "v2b running alive".
+"v1c step 1" is the step-1 detector (running_alive=False); "v2b running alive (current)" is
+the detector all methods use.
 Nothing is written to disk.
 
 For each variant:
@@ -53,9 +53,9 @@ import possession_metrics as pm  # noqa: E402
 # Params
 FPS = 25
 VARIANTS = {
-    "v1c current": dict(columns=D.COLUMNS, running_alive=False),
+    "v1c step 1": dict(columns=D.COLUMNS, running_alive=False),
     "v2a no gap timing": dict(columns=F.PLAYER + D.GAP_ENDS, running_alive=False),
-    "v2b running alive": dict(columns=D.COLUMNS, running_alive=True),
+    "v2b running alive (current)": dict(columns=D.COLUMNS, running_alive=True),
     "v2c both": dict(columns=F.PLAYER + D.GAP_ENDS, running_alive=True),
 }
 

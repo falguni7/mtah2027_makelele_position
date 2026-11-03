@@ -22,12 +22,12 @@ def runs_of(mask):
 
     Every stretch of consecutive True frames, as (first frame, first frame after it), so
     mask[start:stop] is the stretch and stop - start its length. Used to find ball gaps, the
-    graded halves, dead-ball stretches and control events. A plain list does not work.
+    graded halves, dead-ball stretches and control events. mask may be a bool array or list.
 
-        mask = np.array([F, T, T, F, F, T, T, T, F])     # frames 0..8
+        mask = [F, T, T, F, F, T, T, T, F]     # frames 0..8
         runs_of(mask)                          # -> [(1, 3), (5, 8)]
     """
-    edges = np.diff(np.concatenate(([0], mask.astype(np.int8), [0])))
+    edges = np.diff(np.concatenate(([0], np.asarray(mask, dtype=bool).astype(np.int8), [0])))
     return list(zip(np.flatnonzero(edges == 1).tolist(), np.flatnonzero(edges == -1).tolist()))
 
 

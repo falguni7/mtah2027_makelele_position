@@ -48,8 +48,7 @@ def read_atd_meta(game=GAME, data_dir=None, source=DEFAULT_SOURCE):
     The ATD has 46 player slots (both squads); this says which team each slot belongs to (0
     home, 1 away, home being the first team listed; any teamId other than the home one is
     treated as away) and which slot is each team's goalkeeper. Raises ValueError unless there
-    are exactly 2 teams, 46 slots and at least one goalkeeper per team; if a team has several
-    goalkeeper slots, the last listed one is used.
+    are exactly 2 teams, 46 slots and exactly one goalkeeper slot per team.
 
         meta = read_atd_meta()
         meta["team_names"]              # -> e.g. ("Home FC", "Away FC")
@@ -75,10 +74,11 @@ def read_atd_meta(game=GAME, data_dir=None, source=DEFAULT_SOURCE):
         params = {param.findtext("Name"): param.findtext("Value")
                   for param in player.iter("ProviderParameter")}
         if params.get("position_type") == "Goalkeeper":
-            goalkeepers[int(team_of_slot[slot])] = slot
-    if sorted(goalkeepers) != [HOME, AWAY]:
-        raise ValueError("{}: expected one goalkeeper slot per team, found {}".format(
+            goalkeepers.setdefault(int(team_of_slot[slot]), []).append(slot)
+    if sorted(goalkeepers) != [HOME, AWAY] or any(len(s) != 1 for s in goalkeepers.values()):
+        raise ValueError("{}: expected exactly one goalkeeper slot per team, found {}".format(
             meta_path, goalkeepers))
+    goalkeepers = {team: slots[0] for team, slots in goalkeepers.items()}
 
     return {
         "team_names": (teams[0][1], teams[1][1]),
@@ -96,10 +96,10 @@ def read_atd_raw(game=GAME, data_dir=None, source=DEFAULT_SOURCE):
     1 frame id + 46 * 3 player values + 3 ball values = 142 columns. Takes ~20 s, versus minutes
     for a line-by-line Python loop.
 
-    Row i is video frame i (the file's frame_id i + 1). Raises ValueError if a line has more
-    than 142 values or the frame ids are not 1..n_frames without gaps. The ball's third value
-    (its speed) is dropped, see the module notes. A line with fewer than 142 values is padded
-    with NaN by the parser and is not detected.
+    Row i is video frame i (the file's frame_id i + 1). Raises ValueError if any line does not
+    have exactly 46 slot groups and a ball (2 ':', 45 ';' and 94 ',') or the frame ids are not
+    1..n_frames without gaps. The ball's third value (its speed) is dropped, see the module
+    notes.
 
         line "1:0.5,0.5,2.0;...:0.52,0.49,NaN"    # frame_id 1, slot 0 at the centre, 2.0 m/s
         players, ball = read_atd_raw()
@@ -109,7 +109,14 @@ def read_atd_raw(game=GAME, data_dir=None, source=DEFAULT_SOURCE):
     raw_path = require(["atd_raw"], game, data_dir, source)[0]
     n_frames = source_frames(source, game)
     with open(raw_path) as handle:
-        text = handle.read().replace(":", ",").replace(";", ",")
+        text = handle.read()
+    # Every line must have the full layout; the parser below would pad a short one with NaN.
+    expected = (2, N_SLOTS - 1, N_SLOTS * 2 + 2)        # ':' ';' ',' per line
+    for number, line in enumerate(text.splitlines(), 1):
+        if (line.count(":"), line.count(";"), line.count(",")) != expected:
+            raise ValueError("{}: line {} does not have {} slot groups and a ball".format(
+                raw_path, number, N_SLOTS))
+    text = text.replace(":", ",").replace(";", ",")
     table = pd.read_csv(io.StringIO(text), header=None, dtype=np.float32,
                         engine="c").to_numpy()
     del text

@@ -119,7 +119,8 @@ def confident_labels(match, table, use_set_pieces=True, running_alive=True):
     code = tags["code"].str.upper()
     for row in tags[code == "GOALS"].itertuples():
         dead[row.start_frame:max(row.start_frame, row.end_frame - GOAL_END_TRIM)] = True
-        near_tag[row.start_frame - SET_PIECE_CLEAR[0]:row.end_frame + SET_PIECE_CLEAR[1]] = True
+        near_tag[max(0, row.start_frame - SET_PIECE_CLEAR[0]):
+                 row.end_frame + SET_PIECE_CLEAR[1]] = True
     for row in tags[code == "SET PIECES"].itertuples():
         near_tag[max(0, row.start_frame - SET_PIECE_CLEAR[0]):
                  row.start_frame + SET_PIECE_CLEAR[1]] = True
@@ -219,10 +220,11 @@ def decode(p_dead, labels, graded):
 
     Stage 3. p_dead is the classifier's probability per frame, labels the confident labels,
     graded the graded-frame mask. Steps: set confident DEAD frames to 1 and ALIVE to 0; average
-    over +/- SMOOTH (1 s); walk the graded frames and switch to dead when the smoothed value
-    goes above ENTER (0.6), back to alive when it goes below LEAVE (0.4); drop dead stretches
-    shorter than MIN_DEAD (2 s), then alive stretches shorter than MIN_ALIVE (1 s); finally
-    every confident DEAD frame is dead again. Returns a bool mask, False off the graded frames.
+    over +/- SMOOTH (1 s); walk each graded half, starting alive, and switch to dead when the
+    smoothed value goes above ENTER (0.6), back to alive when it goes below LEAVE (0.4); drop
+    dead stretches shorter than MIN_DEAD (2 s), then alive stretches shorter than MIN_ALIVE
+    (1 s), measured inside the half; finally every confident DEAD frame is dead again. Nothing
+    carries across half-time. Returns a bool mask, False off the graded frames.
 
         smoothed p = [0.5, 0.7, 0.5, 0.45, 0.3]          # ignoring the duration rules
         dead       = [F,   T,   T,   T,    F]            # stays dead until p < 0.4
@@ -232,16 +234,21 @@ def decode(p_dead, labels, graded):
     p[labels == ALIVE] = 0.0
     p = centred(p, SMOOTH)
 
+    # Each graded half on its own: the state starts alive at a half's first frame, and runs are
+    # measured inside the half, so nothing leaks across half-time.
     dead = np.zeros(len(p), dtype=bool)
-    state = False
-    for i in np.flatnonzero(graded):
-        if state and p[i] < LEAVE:
-            state = False
-        elif not state and p[i] > ENTER:
-            state = True
-        dead[i] = state
-    dead = drop_short(dead, True, MIN_DEAD)
-    dead = drop_short(dead, False, MIN_ALIVE)
+    for start, stop in runs_of(np.asarray(graded)):
+        half = np.zeros(stop - start, dtype=bool)
+        state = False
+        for i in range(stop - start):
+            if state and p[start + i] < LEAVE:
+                state = False
+            elif not state and p[start + i] > ENTER:
+                state = True
+            half[i] = state
+        half = drop_short(half, True, MIN_DEAD)
+        half = drop_short(half, False, MIN_ALIVE)
+        dead[start:stop] = half
     dead[labels == DEAD] = True
     return dead & graded
 

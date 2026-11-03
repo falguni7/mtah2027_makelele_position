@@ -7,10 +7,9 @@ For each method: label shares, possessions (count and mean length, as the offici
 them), and agreement with Smart Tagging's in-possession phases (mtah/validation/tagging.py).
 Each submission is written to evaluation/results/<method>.csv. Aggregates only.
 
-WARNING: for the method names baseline_raw, baseline_smooth25, baseline_smooth50 and
-baseline_smooth125 (as in the first example above) that path is an official, git-tracked file in
-evaluation/results/, which would be overwritten (scripts/data/check_cache.py compares against
-those files). Use other method names to keep the official files intact.
+The official baselines (baseline_raw, baseline_smooth25, baseline_smooth50, baseline_smooth125,
+as in the first example above) are compared but not written: their files in evaluation/results/
+are the official, git-tracked ones that scripts/data/check_cache.py compares against.
 
 How to read the output: first the number of graded frames inside Smart Tagging in-possession
 phases (the frames the tag_* columns are computed on), then one row per method:
@@ -33,7 +32,7 @@ import pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 from mtah.data import load  # noqa: E402
-from mtah.methods import METHODS  # noqa: E402
+from mtah.methods import METHODS, OFFICIAL_BASELINES  # noqa: E402
 from mtah.validation import tagging  # noqa: E402
 from baseline import write_submission  # noqa: E402
 import possession_metrics as pm  # noqa: E402
@@ -56,7 +55,8 @@ if __name__ == '__main__':
     rows = []
     for name in args.methods:
         labels = METHODS[name](match)
-        write_submission(os.path.join(RESULTS_DIR, name + ".csv"), labels)
+        if name not in OFFICIAL_BASELINES:
+            write_submission(os.path.join(RESULTS_DIR, name + ".csv"), labels)
         codes = pm.label_codes(labels)
         spells = pm.possession_spells(codes, runs)
         lengths = np.array([stop - start for start, stop, _ in spells]) / FPS
