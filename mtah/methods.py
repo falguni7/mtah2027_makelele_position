@@ -17,6 +17,7 @@ The methods follow the roadmap steps:
     hmm_v1             step 3: control events and dead-ball probability decoded with Viterbi
     hmm_v2             step 4: hmm_v1 plus the ball-free team-shape model in the gaps
     hmm_v3             hmm_v2 with the extra shape features (pressing, compactness: ideas 9, 10)
+    hmm_v4             hmm_v3 with cheaper stoppage boundaries near referee whistles
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -155,15 +156,21 @@ def hmm_v2(version=2):
     stretches with no control event (mostly ball gaps) the shape model's P(home) is added as
     evidence for which team has the ball, instead of leaving the decoder to carry the last team.
     version=2 uses the original step-4 shape features (team_shape.COLUMNS_V1); version=3 adds
-    depth, hull area, approach and marking rate (team_shape.COLUMNS) and is named "hmm_v3".
+    depth, hull area, approach and marking rate (team_shape.COLUMNS) and is named "hmm_v3";
+    version=4 is hmm_v3 plus the referee's whistles (mtah/audio/whistle.py): near a whistle,
+    entering or leaving D is cheaper (mtah.temporal.hmm.whistle_switch_costs), so a stoppage
+    the other evidence asks for can start or end at the whistle. It needs the extracted sound
+    (scripts/data/extract_audio.py).
 
         method = hmm_v2()
         method.__name__                        # -> "hmm_v2"
         hmm_v2(version=3).__name__             # -> "hmm_v3"
+        hmm_v2(version=4).__name__             # -> "hmm_v4"
         labels = method(match)                 # (n_frames,) of "H" / "A" / "D"
     """
     from mtah.features import team_shape
-    columns = {2: team_shape.COLUMNS_V1, 3: team_shape.COLUMNS}[version]
+    columns = {2: team_shape.COLUMNS_V1, 3: team_shape.COLUMNS, 4: team_shape.COLUMNS}[version]
+    use_whistles = version >= 4
 
     def method(match):
         """Labels for one match: hmm_v1's decoding plus shape-model evidence in the gaps.
@@ -179,7 +186,12 @@ def hmm_v2(version=2):
         _, p_dead, dead_labels = dead_ball.detect(match, features.compute(match))
         events = control_events(match)
         p_home, frames = shape_evidence(match, events, columns)
-        return decode(match, events, p_dead, dead_labels, p_home, frames)
+        switch = None
+        if use_whistles:
+            from mtah.audio.whistle import match_whistles
+            from mtah.temporal.hmm import whistle_switch_costs
+            switch = whistle_switch_costs(match.n_frames, match_whistles())
+        return decode(match, events, p_dead, dead_labels, p_home, frames, switch)
     method.__name__ = "hmm_v{}".format(version)
     return method
 
@@ -202,4 +214,5 @@ METHODS = {
     "hmm_v1": hmm_v1(),
     "hmm_v2": hmm_v2(),
     "hmm_v3": hmm_v2(version=3),
+    "hmm_v4": hmm_v2(version=4),
 }

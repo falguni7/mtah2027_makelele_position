@@ -33,13 +33,31 @@ The switch cost does not depend on the stoppage length: entering and leaving D c
 2 * DEAD_SWITCH = 8 in total (6 more than a direct H -> A switch when the teams differ). At
 p_dead = 0.98 that is about 21 frames (0.8 s) of evidence, so it acts as a soft minimum duration.
 
+Whistles (optional, the referee's whistles from mtah/audio/whistle.py): a whistle says a
+stoppage boundary is close, but not which one -- the referee whistles to stop play (a foul,
+offside, the end of a half) and to restart it (kick-offs, some free kicks). So near a whistle
+the switch into or out of D is made cheaper (WHISTLE_SWITCH instead of DEAD_SWITCH), each in
+its own window, because the whistle sits at a different place relative to each boundary:
+
+  entering D   from WHISTLE_ENTER[0] to WHISTLE_ENTER[1] seconds around the whistle (-1 to +1 s):
+               the whistle follows the foul or the ball going out within about a second;
+  leaving D    from WHISTLE_LEAVE[0] to WHISTLE_LEAVE[1] seconds after it (0 to +3 s): the
+               restart follows its whistle within a few seconds.
+
+This never forces a stoppage: it only lowers the price of a boundary where the other evidence
+already asks for one, so a stoppage can start or end at the whistle instead of where p_dead
+happens to cross over. whistle_switch_costs() builds the per-frame costs.
+
 Values are chosen from these arguments, not tuned on labels.
 
 What is in it: emissions() builds the (frames, 3) evidence table above, transition_matrix() the
-switch costs, viterbi() finds the best path through one run of frames, and decode() runs it per
-graded half and returns the labels. With the step-4 shape model:
+switch costs, whistle_switch_costs() the cheaper D switches near whistles, viterbi() finds the
+best path through one run of frames, and decode() runs it per graded half and returns the
+labels. With the step-4 shape model, and with whistles:
 
     labels = decode(match, events, p_dead, dead_labels, p_home, shape_frames)
+    switch = whistle_switch_costs(match.n_frames, whistle_events)
+    labels = decode(match, events, p_dead, dead_labels, p_home, shape_frames, switch)
 """
 
 import numpy as np
@@ -58,6 +76,9 @@ CARRY_COST = 0.02          # per frame, 0.5 per second
 TEAM_WEIGHT = 0.05         # shape-model evidence, ~ one observation per 0.8 s
 TEAM_SWITCH = 2.0
 DEAD_SWITCH = 4.0
+WHISTLE_SWITCH = 1.0       # cost of entering or leaving D near a whistle
+WHISTLE_ENTER = (-1.0, 1.0)    # seconds around a whistle where entering D is cheaper
+WHISTLE_LEAVE = (0.0, 3.0)     # seconds around a whistle where leaving D is cheaper
 
 
 def emissions(n, events, p_dead, dead_labels, graded, p_home=None, shape_frames=None):
@@ -147,7 +168,32 @@ def transition_matrix():
     return -cost
 
 
-def viterbi(score, transition):
+def whistle_switch_costs(n_frames, whistle_events):
+    """(enter, leave): per-frame cost of switching into and out of D, lower near whistles.
+
+    whistle_events are (start_s, stop_s, ...) tuples on the video timeline, as from
+    mtah.audio.whistle.detect(). Both arrays are DEAD_SWITCH (4) everywhere, except enter is
+    WHISTLE_SWITCH (1) on frames from WHISTLE_ENTER[0] to WHISTLE_ENTER[1] seconds (-1 to +1 s)
+    around each whistle's start, and leave is WHISTLE_SWITCH on frames from WHISTLE_LEAVE[0]
+    to WHISTLE_LEAVE[1] seconds (0 to +3 s) after it. "Frame t" means the switch happens
+    between frame t - 1 and frame t, i.e. frame t is the first one in the new state.
+
+        whistle_events = [(10.0, 10.4, 3800.0, 25.0)]     # a whistle at 10 s (frame 250)
+        enter, leave = whistle_switch_costs(500, whistle_events)
+        enter[224:227], enter[250], enter[275]  # -> [4, 1, 1], 1, 4     frames 225-274 cheap
+        leave[249], leave[250], leave[325]      # -> 4, 1, 4             frames 250-324 cheap
+    """
+    enter = np.full(n_frames, DEAD_SWITCH)
+    leave = np.full(n_frames, DEAD_SWITCH)
+    for start_s, *_ in whistle_events:
+        for out, (before, after) in ((enter, WHISTLE_ENTER), (leave, WHISTLE_LEAVE)):
+            first = max(0, int(round((start_s + before) * FPS)))
+            last = min(n_frames, int(round((start_s + after) * FPS)))
+            out[first:last] = np.minimum(out[first:last], WHISTLE_SWITCH)
+    return enter, leave
+
+
+def viterbi(score, transition, switch=None):
     """Most likely state sequence for one run of frames.
 
     score is (frames, 3) log evidence per state as from emissions(), transition the (3, 3) log
@@ -155,6 +201,9 @@ def viterbi(score, transition):
     of evidence plus transitions. There is no start cost: any first state is allowed. On an exact
     tie the lower state (H, then A, then D) wins. A change only happens when the evidence for it
     outweighs the switch cost, so a one-frame blip is smoothed away but a sustained change is not.
+    switch, if given, is (enter, leave) from whistle_switch_costs() for these frames: the cost
+    of entering D, and of leaving it, into each frame, replacing the fixed DEAD_SWITCH of
+    transition (H <-> A keeps its cost).
 
         transition = transition_matrix()       # H <-> A costs 2
         score = [[0, -3, -5],                  # frame 0 says H
@@ -165,14 +214,25 @@ def viterbi(score, transition):
 
         score = [[0, -3, -5], [-1, 0, -5], [0, -3, -5], [0, -3, -5]]   # one A blip
         viterbi(score, transition)             # -> [0, 0, 0, 0]  (H H H H, total -1)
+
+        # D evidence on frames 1-2 worth 3 against H: not enough to pay 4 + 4 for a stoppage,
+        # but enough when a whistle makes entering (and leaving) D cost 1 there
+        score = [[0, -9, -9], [-3, -9, 0], [-3, -9, 0], [0, -9, -9]]
+        viterbi(score, transition)                         # -> [0, 0, 0, 0]
+        viterbi(score, transition, ([4, 1, 4, 4], [4, 4, 4, 1]))   # -> [0, 2, 2, 0]
     """
     n = len(score)
     back = np.zeros((n, 3), dtype=np.int8)
-    best = score[0].copy()
+    best = list(np.asarray(score[0], dtype=np.float64))
     trans = transition.tolist()
+    if switch is not None:
+        enter, leave = (np.asarray(costs, dtype=np.float64).tolist() for costs in switch)
     for t in range(1, n):
         b0, b1, b2 = best
         row = score[t]
+        if switch is not None:
+            trans[0][2] = trans[1][2] = -enter[t]
+            trans[2][0] = trans[2][1] = -leave[t]
         new = []
         for j in range(3):
             c0 = b0 + trans[0][j]
@@ -195,13 +255,14 @@ def viterbi(score, transition):
     return path
 
 
-def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None):
+def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None, switch=None):
     """Per-frame "H" / "A" / "D" labels; each graded half is decoded on its own.
 
     The step-3 entry point: builds the evidence with emissions() from the step-2 control events,
     the step-1 dead-ball probability p_dead and confident dead_labels (and optionally the step-4
-    p_home with the shape_frames where it applies), then runs viterbi() separately on every
-    graded run of the match, so nothing carries over half-time. Frames outside graded are "D".
+    p_home with the shape_frames where it applies, and the whistle switch costs, (enter, leave)
+    from whistle_switch_costs()), then runs viterbi() separately on every graded run of the
+    match, so nothing carries over half-time. Frames outside graded are "D".
 
         # the 4-frame example of emissions(): one home event at frames 1-2, p_dead 0.5
         decode(match, [(1, 3, 0)], p_dead, dead_labels)   # -> ["H", "H", "H", "H"]
@@ -211,6 +272,7 @@ def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None):
     transition = transition_matrix()
     labels = np.full(match.n_frames, "D", dtype="<U1")
     for start, stop in runs_of(graded):
-        path = viterbi(score[start:stop], transition)
+        costs = None if switch is None else (switch[0][start:stop], switch[1][start:stop])
+        path = viterbi(score[start:stop], transition, costs)
         labels[start:stop] = np.array(["H", "A", "D"])[path]
     return labels

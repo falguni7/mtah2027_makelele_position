@@ -4,6 +4,7 @@
     from mtah.audio import whistle
     tone = whistle.pair_strength(whistle.rise(audio.load()))   # per 10 ms: how whistle-like
     events = whistle.detect(tone)          # [(start_s, stop_s, low_hz, strength_db)]
+    events = whistle.match_whistles()      # the same for the whole match, computed once
 
 How a referee's whistle behaves: elite referees blow the Molten Valkeen (standard for FIFA and
 UEFA referees), a pealess whistle that sounds TWO tones at the same time, specified at about
@@ -36,14 +37,16 @@ scripts/audio/whistle_check.py and the work log. No labels are used.
 
 In this file, in pipeline order: band_power() and background() give each pitch's power and
 usual level, rise() compares the two, pair_strength() turns that into one whistle-likeness
-value per 10 ms, detect() turns it into whistle events, and events_to_frames() marks the video
-frames each event covers.
+value per 10 ms, detect() turns it into whistle events, events_to_frames() marks the video
+frames each event covers, and match_whistles() runs it all once on the match's sound.
 """
+
+from functools import lru_cache
 
 import numpy as np
 from scipy.ndimage import median_filter
 
-from mtah.audio import SAMPLE_RATE
+from mtah.audio import AUDIO_PATH, SAMPLE_RATE, load
 from mtah.utils import runs_of
 
 # Params
@@ -217,3 +220,20 @@ def events_to_frames(events, n_frames):
     for start, stop, _, _ in events:
         out[int(np.floor(start * FPS)):int(np.ceil(stop * FPS))] = True
     return out
+
+
+@lru_cache(maxsize=None)
+def match_whistles(path=AUDIO_PATH):
+    """The match's whistle events, detected once per Python process and then reused.
+
+    The whole chain on the extracted sound: load(), rise(), pair_strength(), detect() with the
+    default thresholds. That takes a minute or two, and the methods call it on every run (the
+    masking test runs a method dozens of times on masked copies of the match, which never
+    change the sound), so the result is kept for the rest of the process. Returns a tuple of
+    (start_s, stop_s, low_hz, strength_db) events, the same as detect().
+
+        events = match_whistles()             # ~1-2 min the first time
+        events = match_whistles()             # instant afterwards
+        len(events)                           # -> 70 on this match
+    """
+    return tuple(detect(pair_strength(rise(load(path)))))
