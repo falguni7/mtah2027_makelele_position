@@ -95,6 +95,12 @@ def split_starts(events):
 def at_offsets(values, anchors, offsets):
     """(anchors, offsets) array of values[anchor + offset], NaN where that is off the match.
 
+    values is one value per frame (e.g. the ball's acceleration), anchors are frames of
+    interest (e.g. the starts of control events after a possession change), offsets frame
+    shifts around them. Row i, column j is the value offsets[j] frames after anchors[i]; frames
+    before 0 or past the end are NaN. Averaging the rows gives the typical profile of a signal
+    around the anchors, e.g. whether ball acceleration peaks just before a change.
+
         values = [0, 1, 2, 3, 4]
         at_offsets(values, [1, 4], [-1, 0, 1])     # -> [[0, 1, 2], [3, 4, nan]]
     """
@@ -108,6 +114,11 @@ def at_offsets(values, anchors, offsets):
 
 def rate(values, half=RATE_HALF):
     """|values[t + half] - values[t - half]| per second; NaN at the ends or where either is NaN.
+
+    values is one value per frame (e.g. a team-shape feature such as the hull area), half the
+    number of frames looked ahead and back (default RATE_HALF, 0.5 s). The result is how fast
+    the value changes around each frame, per second, regardless of direction: idea 8's "rapid
+    shape change" signal. The first and last `half` frames have no window and are NaN.
 
         values = [0, 0, 0, 1, 2, 2, 2], half = 1 (at 25 fps the window is 2 frames, 0.08 s)
         rate(values, 1)   # -> [nan, 0, 12.5, 25, 12.5, 0, nan]

@@ -57,7 +57,13 @@ N_RANDOM = 3000
 
 
 def dead_stretches(labels, graded):
-    """[(start, stop)] runs of "D" inside the graded halves (frames, half-open).
+    """[(start, stop)] runs of "D" inside the graded halves: the method's dead-ball stretches.
+
+    labels is a method's per-frame output ("H" / "A" / "D" / "X"), graded the bool mask of the
+    graded frames. A stretch's start is the first D frame (where play stops), its stop the first
+    frame after it (where play restarts); frames are half-open, so stop - start is the length.
+    D outside the graded halves (half-time, before and after the match) is ignored, so a
+    stretch never crosses half-time.
 
         labels = ["H", "D", "D", "A", "D"], graded = [T, T, T, T, F]
         dead_stretches(labels, graded)     # -> [(1, 3)]   frame 4 is not graded
@@ -67,6 +73,12 @@ def dead_stretches(labels, graded):
 
 def near_whistle(frames, whistle_starts, before, after):
     """Share of frames with a whistle starting in [frame/25 + before, frame/25 + after] seconds.
+
+    frames are video frames (e.g. the starts of the D stretches, or random graded frames for
+    chance), whistle_starts the whistle start times in seconds. For each frame it asks: did a
+    whistle start in this window around it? Negative `before` looks back in time. The answer is
+    the share of frames where one did, NaN for no frames at all. Used for "stretch starts at a
+    whistle" and the same at random moments.
 
         frames = [250, 1000], whistle_starts = [10.5]      # a whistle at 10.5 s
         near_whistle(frames, whistle_starts, -1, 1)         # -> 0.5   frame 250 is at 10.0 s
@@ -99,7 +111,12 @@ def near_boundary(moments_s, stretches, enter_window, leave_window):
     ends = np.array([b for _, b in stretches]) / FPS
 
     def hit(points, window):
-        """Per moment: is some point in [moment + window[0], moment + window[1]]?"""
+        """Bool per moment of t: does at least one of points (seconds) lie from window[0] to
+        window[1] seconds after that moment (both ends included)? No points: all False.
+
+            t = [10.5, 30.0], points = [10.0], window = (-1, 1)
+            hit(points, window)                  # -> [True, False]   10.0 is 0.5 s before 10.5
+        """
         if not len(points):
             return np.zeros(len(t), dtype=bool)
         points = np.sort(points)

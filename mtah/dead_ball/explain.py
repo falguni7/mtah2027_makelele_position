@@ -86,7 +86,12 @@ def explain_gaps(match, table, whistles, min_length=MIN_GAP):
     next_line = table["next_seen_line_dist"].to_numpy()
 
     def any_in(starts, lo, hi):
-        """True if some value of the sorted starts lies in [lo, hi]."""
+        """True if at least one value of the sorted array starts lies in [lo, hi] (both ends
+        included). Used for "is there a whistle (or a tag) in this window around the gap?".
+
+            any_in(np.array([3.0, 10.0]), 9.0, 12.0)     # -> True    10 s is inside
+            any_in(np.array([3.0, 10.0]), 4.0, 9.5)      # -> False   nothing in 4..9.5 s
+        """
         return bool(np.searchsorted(starts, hi, side="right") > np.searchsorted(starts, lo))
 
     out = []

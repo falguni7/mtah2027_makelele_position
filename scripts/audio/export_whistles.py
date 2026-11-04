@@ -48,7 +48,10 @@ OUT_PATH = os.path.join(ROOT, "outputs", "whistles.csv")
 
 
 def timestamp(seconds):
-    """Seconds on the video timeline as H:MM:SS.ss.
+    """Seconds on the video timeline as H:MM:SS.ss, the way a video player shows the time.
+
+    seconds is a time from the start of the video (frame / 25). Used for the start_time and
+    stop_time columns, so a whistle can be found in the video by its timestamp.
 
         timestamp(445.72)        # -> "0:07:25.72"
         timestamp(3725.5)        # -> "1:02:05.50"

@@ -134,7 +134,15 @@ if __name__ == '__main__':
     outside = ~graded & ~halftime
 
     def per_minute(events):
-        """Events per minute in play / at half-time / before and after the match."""
+        """Events per minute in play / at half-time / before and after the match, as text.
+
+        events are whistle events (start_s, ...); each counts where its start falls. Each rate
+        is the count in that part divided by the part's length in minutes. Half-time has no
+        refereeing, so its rate is the false-alarm rate of the detector.
+
+            # 30 events in 90 min of play, 3 in 15 min of half-time, 2 in 20 min outside
+            per_minute(events)                   # -> "0.33 / 0.20 / 0.10"
+        """
         frames = np.array([min(int(e[0] * FPS), match.n_frames - 1) for e in events], dtype=int)
         return " / ".join("{:.2f}".format(np.isin(frames, np.flatnonzero(m)).sum()
                                           / (m.sum() / FPS / 60))

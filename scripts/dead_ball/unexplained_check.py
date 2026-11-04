@@ -46,6 +46,11 @@ BUCKETS = ((3, 10), (10, 30), (30, 10 ** 6))     # gap length, seconds
 def gap_mask(n_frames, gaps):
     """Bool mask of the frames of the given gaps (dicts with "start" and "stop").
 
+    n_frames is the length of the mask (the match's frame count), gaps a list of gap dicts as
+    from mtah.dead_ball.explain.explain_gaps() (only "start" and "stop" are read; stop is
+    excluded). Used to pick the frames of the explained, or of the unexplained, gaps, to count
+    what the methods label there.
+
         gap_mask(6, [{"start": 1, "stop": 3}])     # -> [F, T, T, F, F, F]
     """
     mask = np.zeros(n_frames, dtype=bool)
@@ -55,7 +60,11 @@ def gap_mask(n_frames, gaps):
 
 
 def explained(g):
-    """True if the gap has at least one reason.
+    """True if the gap has at least one reason to be a stoppage, False if it is "unexplained".
+
+    g is one gap dict from mtah.dead_ball.explain.explain_gaps(); the reasons are its bool
+    fields "whistle" (a referee whistle around the gap), "line" (the ball last or next seen
+    near a line) and "tag" (a set-piece or goal tag around it), REASONS above.
 
         explained({"whistle": False, "line": True, "tag": False})    # -> True
     """
