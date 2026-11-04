@@ -16,6 +16,13 @@ end matters for spellF1. For each method this prints:
                    and the same share at random graded frames ("chance")
   end at whistle   the same for stretch ends, whistle within 0 to 3 s before the end
 
+Then the same seen from the whistles: of the whistles during the graded halves, the share with
+a stretch start within -1 to +1 s of it ("start near"), a stretch end within 0 to 3 s after it
+("end near"), either of the two ("boundary near"), and the share that fall on a D frame
+("in D"); next to each, the same share at random graded moments ("chance"). A whistle with no
+boundary near it is a stoppage the method missed, a whistle during a long stoppage (a
+substitution, an injury), or a false alarm of the whistle detector.
+
 Then, for every method after the first, against the first one:
 
   frames changed   graded frames whose label differs
@@ -26,7 +33,7 @@ Then, for every method after the first, against the first one:
 The whistles come from mtah/audio/whistle.py and need the extracted sound
 (scripts/data/extract_audio.py). Note: for a method that USES the whistles (hmm_v4), the
 "at whistle" shares are no independent check -- they show that the mechanism works, not that
-the boundaries are right.
+the boundaries are right. For a method that does not use them (hmm_v3) they are.
 """
 
 import argparse
@@ -71,6 +78,36 @@ def near_whistle(frames, whistle_starts, before, after):
     lo = np.searchsorted(starts, t + before, side="left")
     hi = np.searchsorted(starts, t + after, side="right")
     return float(np.mean(hi > lo))
+
+
+def near_boundary(moments_s, stretches, enter_window, leave_window):
+    """(start near, end near, either): shares of moments with a stretch boundary close to them.
+
+    moments_s are seconds on the video timeline, stretches [(start, stop)] frames. A start counts
+    if it lies from enter_window[0] to enter_window[1] seconds after the moment, an end (the
+    stop frame) from leave_window[0] to leave_window[1] seconds after it -- the windows of
+    mtah/temporal/hmm.py, seen from the whistle.
+
+        stretches = [(250, 400)]                       # D from 10 s to 16 s
+        near_boundary([10.5, 14.0, 30.0], stretches, (-1, 1), (0, 3))
+        # -> (0.333, 0.333, 0.667)   10.5 s: start 0.5 s before; 14 s: end 2 s after; 30 s: none
+    """
+    if not len(moments_s):
+        return np.nan, np.nan, np.nan
+    t = np.asarray(moments_s, dtype=np.float64)
+    starts = np.array([a for a, _ in stretches]) / FPS
+    ends = np.array([b for _, b in stretches]) / FPS
+
+    def hit(points, window):
+        """Per moment: is some point in [moment + window[0], moment + window[1]]?"""
+        if not len(points):
+            return np.zeros(len(t), dtype=bool)
+        points = np.sort(points)
+        return (np.searchsorted(points, t + window[1], side="right")
+                > np.searchsorted(points, t + window[0], side="left"))
+
+    s, e = hit(starts, enter_window), hit(ends, leave_window)
+    return float(s.mean()), float(e.mean()), float((s | e).mean())
 
 
 def match_stretches(base, other):
@@ -130,6 +167,22 @@ if __name__ == '__main__':
             np.median(lengths) if len(lengths) else np.nan, len(spells),
             near_whistle([a for a, _ in stretches], whistle_starts, *enter_window),
             near_whistle([b for _, b in stretches], whistle_starts, *leave_window)))
+
+    in_play = [w for w in whistle_starts
+               if int(w * FPS) < len(graded) and graded[int(w * FPS)]]
+    random_s = random_frames / FPS
+    print("\nseen from the {} whistles in the graded halves (chance at random moments in "
+          "brackets)".format(len(in_play)))
+    print("{:<10} {:>16} {:>16} {:>16} {:>16}".format(
+        "method", "start near", "end near", "boundary near", "in D"))
+    for name in args.methods:
+        labels, stretches = results[name]
+        seen = near_boundary(in_play, stretches, WHISTLE_ENTER, WHISTLE_LEAVE)
+        chance = near_boundary(random_s, stretches, WHISTLE_ENTER, WHISTLE_LEAVE)
+        in_d = np.mean([labels[int(w * FPS)] == "D" for w in in_play])
+        print("{:<10} {}  {:6.3f} ({:.3f})".format(
+            name, "  ".join("{:6.3f} ({:.3f})".format(a, b) for a, b in zip(seen, chance)),
+            in_d, (labels[random_frames] == "D").mean()))
 
     base_name = args.methods[0]
     base_labels, base_stretches = results[base_name]
