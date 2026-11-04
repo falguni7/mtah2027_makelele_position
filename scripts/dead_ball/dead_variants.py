@@ -7,7 +7,10 @@ Each variant (VARIANTS below) is the detector of mtah/dead_ball/detector.py with
 feature columns and with or without the "sustained running counts as alive" labels. Each one is
 trained twice (without and with the set-piece labels) and then fed to the step-4 decoder.
 "v1c step 1" is the step-1 detector (running_alive=False); "v2b running alive (current)" is
-the detector all methods use.
+the detector hmm_v2 to hmm_v4 use; "v3 whistle timing" adds the referee-whistle inputs
+(time since the last whistle and until the next, mtah/dead_ball/detector.py WHISTLE), as in
+hmm_v5. The decoder below is the same for every variant (no whistle switch costs), so the
+rows differ only in the detector.
 Nothing is written to disk.
 
 For each variant:
@@ -41,6 +44,7 @@ import pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 from mtah import features as F  # noqa: E402
+from mtah.audio.whistle import match_whistles  # noqa: E402
 from mtah.data import load  # noqa: E402
 from mtah.dead_ball import detector as D  # noqa: E402
 from mtah.methods import shape_evidence  # noqa: E402
@@ -57,6 +61,7 @@ VARIANTS = {
     "v2a no gap timing": dict(columns=F.PLAYER + D.GAP_ENDS, running_alive=False),
     "v2b running alive (current)": dict(columns=D.COLUMNS, running_alive=True),
     "v2c both": dict(columns=F.PLAYER + D.GAP_ENDS, running_alive=True),
+    "v3 whistle timing": dict(columns=D.COLUMNS, running_alive=True, whistles=True),
 }
 
 
@@ -91,6 +96,8 @@ if __name__ == '__main__':
 
     rows = []
     for name, options in VARIANTS.items():
+        if options.get("whistles"):
+            options = dict(options, whistles=match_whistles())
         held_dead, _, _ = D.detect(match, table, use_set_pieces=False, **options)
         early, late = restart_scores(held_dead, starts)
         dead, p_dead, labels = D.detect(match, table, **options)

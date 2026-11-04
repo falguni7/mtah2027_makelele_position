@@ -21,7 +21,9 @@ Three stages:
               sustained running by the players, ball tracked or not
   2. a classifier trained on those frames using PLAYER features and the ball-gap context, not
      the ball's speed or position, so it cannot just learn the rules back; alive examples inside
-     short open-play gaps stop it from learning "ball missing = dead";
+     short open-play gaps stop it from learning "ball missing = dead". Optionally also the
+     referee's whistles (WHISTLE: seconds since the last whistle and until the next one, from
+     mtah/audio/whistle.py), which exist inside ball gaps just as well;
   3. decode(): confident DEAD frames are pinned dead; confident ALIVE frames only enter as
      probability 0 before smoothing, so hysteresis and minimum durations can still turn them
      dead. The rest take the classifier's probability, smoothed, with hysteresis and minimum
@@ -167,6 +169,8 @@ def confident_labels(match, table, use_set_pieces=True, running_alive=True):
 GAP_TIMING = ["gap_length", "since_seen", "until_seen"]
 GAP_ENDS = ["last_seen_line_dist", "next_seen_line_dist"]
 COLUMNS = F.PLAYER + GAP_TIMING + GAP_ENDS
+# Optional: when the referee last whistled and next whistles (mtah.audio.whistle.timing_features).
+WHISTLE = ["since_whistle", "until_whistle"]
 
 
 def train(table, labels, columns=COLUMNS):
@@ -253,20 +257,28 @@ def decode(p_dead, labels, graded):
     return dead & graded
 
 
-def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=True):
+def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=True,
+           whistles=None):
     """(dead mask, raw P(dead), confident labels) for every video frame.
 
     The whole detector: confident_labels, train, predict, decode. match is the cached Match
     (match.smart_tagging must be present; a match without tagging raises), table the feature
     table of mtah.features.compute; use_set_pieces and running_alive switch those
-    confident-label rules, columns picks the classifier inputs. Returns a bool array
+    confident-label rules, columns picks the classifier inputs. whistles, if given, are whistle
+    events (mtah.audio.whistle.match_whistles()); their WHISTLE timing columns are then added to
+    the table (a copy) and to the classifier inputs. Returns a bool array
     (dead = D), a float32 array of the classifier's P(dead) before decoding and the int8
     labels, all of length n_frames.
 
         dead, p_dead, labels = detect(match, table)
         dead.mean()                          # share of frames called dead
         detect(match, table, use_set_pieces=False)   # without the set-piece rule
+        detect(match, table, whistles=match_whistles())   # with the whistle features
     """
+    if whistles is not None:
+        from mtah.audio.whistle import timing_features
+        table = table.assign(**timing_features(match.n_frames, whistles))
+        columns = list(columns) + [c for c in WHISTLE if c not in columns]
     labels = confident_labels(match, table, use_set_pieces, running_alive)
     model = train(table, labels, columns)
     p_dead = predict(model, table, columns)

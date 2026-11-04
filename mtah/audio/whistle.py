@@ -38,7 +38,8 @@ scripts/audio/whistle_check.py and the work log. No labels are used.
 In this file, in pipeline order: band_power() and background() give each pitch's power and
 usual level, rise() compares the two, pair_strength() turns that into one whistle-likeness
 value per 10 ms, detect() turns it into whistle events, events_to_frames() marks the video
-frames each event covers, and match_whistles() runs it all once on the match's sound.
+frames each event covers, match_whistles() runs it all once on the match's sound, and
+timing_features() says for every frame how long since the last whistle and until the next.
 """
 
 from functools import lru_cache
@@ -64,6 +65,7 @@ MAX_JUMP = 150.0            # Hz the low tone may move between consecutive 10 ms
 MAX_DROP = 3                # steps (30 ms) a whistle may dip below the threshold and continue
 MIN_DURATION = 0.15         # seconds; shorter blips are not whistles
 CHUNK = 6000                # spectra computed per batch (60 s of sound), to bound memory
+TIMING_CAP = 60.0           # seconds; timing_features() does not count further than this
 
 
 def band_power(samples):
@@ -237,3 +239,33 @@ def match_whistles(path=AUDIO_PATH):
         len(events)                           # -> 70 on this match
     """
     return tuple(detect(pair_strength(rise(load(path)))))
+
+
+def timing_features(n_frames, events, cap=TIMING_CAP):
+    """{"since_whistle", "until_whistle"}: seconds from the last whistle and to the next, per frame.
+
+    For every video frame f (at f / 25 s): since_whistle is the time since the start of the
+    latest whistle at or before it, until_whistle the time until the start of the next one
+    after it, both in seconds and capped at `cap` (60 s), which also stands for "none in this
+    match". These are the whistle inputs of the dead-ball classifier
+    (mtah/dead_ball/detector.py): what they mean for dead or alive is learned there, because a
+    whistle can stop play (a foul: dead after it) or restart it (a kick-off: alive after it).
+
+        events = [(10.0, 10.4, 3800.0, 25.0), (30.0, 30.3, 3800.0, 20.0)]   # whistles at 10, 30 s
+        t = timing_features(1000, events)        # 1000 frames = 40 s
+        t["since_whistle"][[0, 250, 500, 999]]   # -> [60.0, 0.0, 10.0, 9.96]
+        t["until_whistle"][[0, 250, 500, 999]]   # -> [10.0, 20.0, 10.0, 60.0]
+    """
+    t = np.arange(n_frames) / FPS
+    starts = np.sort(np.array([e[0] for e in events], dtype=np.float64))
+    since = np.full(n_frames, cap)
+    until = np.full(n_frames, cap)
+    if len(starts):
+        last = np.searchsorted(starts, t, side="right") - 1       # latest start <= t
+        has_last = last >= 0
+        since[has_last] = t[has_last] - starts[last[has_last]]
+        following = np.searchsorted(starts, t, side="right")       # first start > t
+        has_next = following < len(starts)
+        until[has_next] = starts[following[has_next]] - t[has_next]
+    return {"since_whistle": np.minimum(since, cap).astype(np.float32),
+            "until_whistle": np.minimum(until, cap).astype(np.float32)}
