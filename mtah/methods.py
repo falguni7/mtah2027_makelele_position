@@ -19,6 +19,7 @@ The methods follow the roadmap steps:
     hmm_v3             hmm_v2 with the extra shape features (pressing, compactness: ideas 9, 10)
     hmm_v4             hmm_v3 with cheaper stoppage boundaries near referee whistles
     hmm_v5             hmm_v4 with whistle timing as inputs of the dead-ball classifier
+    hmm_v6             hmm_v4 with weaker dead-ball evidence in ball gaps with no reason to stop
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -162,20 +163,26 @@ def hmm_v2(version=2):
     entering or leaving D is cheaper (mtah.temporal.hmm.whistle_switch_costs), so a stoppage
     the other evidence asks for can start or end at the whistle; version=5 is hmm_v4 whose
     dead-ball classifier also gets the time since the last whistle and until the next one
-    (mtah.dead_ball.detector.WHISTLE), so whistles become dead-ball evidence of their own.
-    Versions 4 and 5 need the extracted sound (scripts/data/extract_audio.py).
+    (mtah.dead_ball.detector.WHISTLE), so whistles become dead-ball evidence of their own;
+    version=6 is hmm_v4 (not hmm_v5) where, in ball gaps of 3 s or more with no reason for a
+    stoppage (no whistle, ball not near a line, no set-piece or goal tag:
+    mtah.dead_ball.explain), the odds of P(dead) are divided by 4 before decoding, so a
+    stoppage there needs stronger evidence. Versions 4 to 6 need the extracted sound
+    (scripts/data/extract_audio.py).
 
         method = hmm_v2()
         method.__name__                        # -> "hmm_v2"
         hmm_v2(version=3).__name__             # -> "hmm_v3"
         hmm_v2(version=4).__name__             # -> "hmm_v4"
         hmm_v2(version=5).__name__             # -> "hmm_v5"
+        hmm_v2(version=6).__name__             # -> "hmm_v6"
         labels = method(match)                 # (n_frames,) of "H" / "A" / "D"
     """
     from mtah.features import team_shape
     columns = team_shape.COLUMNS_V1 if version == 2 else team_shape.COLUMNS
     use_whistles = version >= 4             # cheaper D boundaries near whistles
-    whistle_features = version >= 5         # whistle timing in the dead-ball classifier
+    whistle_features = version == 5         # whistle timing in the dead-ball classifier
+    soften_unexplained = version >= 6       # weaker P(dead) in gaps with no reason to stop
 
     def method(match):
         """Labels for one match: hmm_v1's decoding plus shape-model evidence in the gaps.
@@ -190,8 +197,13 @@ def hmm_v2(version=2):
         from mtah.possession.control import control_events
         from mtah.temporal.hmm import decode, whistle_switch_costs
         whistles = match_whistles() if use_whistles else None
+        table = features.compute(match)
         _, p_dead, dead_labels = dead_ball.detect(
-            match, features.compute(match), whistles=whistles if whistle_features else None)
+            match, table, whistles=whistles if whistle_features else None)
+        if soften_unexplained:
+            from mtah.dead_ball import explain
+            gaps = explain.explain_gaps(match, table, whistles)
+            p_dead = explain.soften(p_dead, explain.unexplained_frames(match.n_frames, gaps))
         events = control_events(match)
         p_home, frames = shape_evidence(match, events, columns)
         switch = whistle_switch_costs(match.n_frames, whistles) if use_whistles else None
@@ -220,4 +232,5 @@ METHODS = {
     "hmm_v3": hmm_v2(version=3),
     "hmm_v4": hmm_v2(version=4),
     "hmm_v5": hmm_v2(version=5),
+    "hmm_v6": hmm_v2(version=6),
 }
