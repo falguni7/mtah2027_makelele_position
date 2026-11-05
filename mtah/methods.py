@@ -20,6 +20,7 @@ The methods follow the roadmap steps:
     hmm_v4             hmm_v3 with cheaper stoppage boundaries near referee whistles
     hmm_v5             hmm_v4 with whistle timing as inputs of the dead-ball classifier
     hmm_v6             hmm_v4 with weaker dead-ball evidence in ball gaps with no reason to stop
+    hmm_v7             hmm_v6 with how the tactical camera turns, in the detector and shape model
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -126,7 +127,11 @@ def hmm_v1():
     return method
 
 
-def shape_evidence(match, events, columns=None):
+# The camera column the shape model gets in hmm_v7 (mtah.features.camera).
+SHAPE_CAMERA = ["cam_advance_rate"]
+
+
+def shape_evidence(match, events, columns=None, camera=None):
     """Step 4: out-of-fold P(home) from the ball-free shape model, and the frames to use it on.
 
     The shape model guesses who has the ball from where the players stand (team shape), without
@@ -137,6 +142,9 @@ def shape_evidence(match, events, columns=None):
     mask of the graded frames far enough from any control event that the shape is the only team
     evidence there besides the temporal model's carry bias (mtah.possession.shape_model.gap_frames).
     columns picks the shape features the model uses (default: all of team_shape.COLUMNS).
+    camera, if given, is the camera table of mtah.features.camera.compute(match): its
+    SHAPE_CAMERA column (cam_advance_rate, how fast the camera's aim moves towards the home
+    team's attacking goal) is added to the shape table and to the columns.
 
         events = [(100, 120, 0), (900, 910, 1)]        # (start, stop, team)
         p_home, frames = shape_evidence(match, events)
@@ -146,8 +154,12 @@ def shape_evidence(match, events, columns=None):
     from mtah.features import team_shape
     from mtah.possession import shape_model
     target = shape_model.pseudo_labels(match, events)
-    columns = team_shape.COLUMNS if columns is None else columns
-    p_home, _ = shape_model.out_of_fold(team_shape.compute(match), target, match.graded, columns)
+    columns = list(team_shape.COLUMNS if columns is None else columns)
+    table = team_shape.compute(match)
+    if camera is not None:
+        table = table.assign(**{c: camera[c].to_numpy() for c in SHAPE_CAMERA})
+        columns += [c for c in SHAPE_CAMERA if c not in columns]
+    p_home, _ = shape_model.out_of_fold(table, target, match.graded, columns)
     return p_home, shape_model.gap_frames(match, events)
 
 
@@ -167,8 +179,11 @@ def hmm_v2(version=2):
     version=6 is hmm_v4 (not hmm_v5) where, in ball gaps of 3 s or more with no reason for a
     stoppage (no whistle, ball not near a line, no set-piece or goal tag:
     mtah.dead_ball.explain), the odds of P(dead) are divided by 4 before decoding, so a
-    stoppage there needs stronger evidence. Versions 4 to 6 need the extracted sound
-    (scripts/data/extract_audio.py).
+    stoppage there needs stronger evidence; version=7 is hmm_v6 plus how the tactical camera
+    turns (mtah.features.camera): its turning speed over 1 s and 3 s as dead-ball classifier
+    inputs (mtah.dead_ball.detector.CAMERA), as the camera rests in stoppages and turns in play,
+    and the speed of its aim towards the home team's goal as a shape-model input
+    (SHAPE_CAMERA). Versions 4 to 7 need the extracted sound (scripts/data/extract_audio.py).
 
         method = hmm_v2()
         method.__name__                        # -> "hmm_v2"
@@ -176,6 +191,7 @@ def hmm_v2(version=2):
         hmm_v2(version=4).__name__             # -> "hmm_v4"
         hmm_v2(version=5).__name__             # -> "hmm_v5"
         hmm_v2(version=6).__name__             # -> "hmm_v6"
+        hmm_v2(version=7).__name__             # -> "hmm_v7"
         labels = method(match)                 # (n_frames,) of "H" / "A" / "D"
     """
     from mtah.features import team_shape
@@ -183,6 +199,7 @@ def hmm_v2(version=2):
     use_whistles = version >= 4             # cheaper D boundaries near whistles
     whistle_features = version == 5         # whistle timing in the dead-ball classifier
     soften_unexplained = version >= 6       # weaker P(dead) in gaps with no reason to stop
+    use_camera = version >= 7               # camera turning in the detector and shape model
 
     def method(match):
         """Labels for one match: hmm_v1's decoding plus shape-model evidence in the gaps.
@@ -197,15 +214,17 @@ def hmm_v2(version=2):
         from mtah.possession.control import control_events
         from mtah.temporal.hmm import decode, whistle_switch_costs
         whistles = match_whistles() if use_whistles else None
+        from mtah.features import camera as camera_features
         table = features.compute(match)
+        cam = camera_features.compute(match) if use_camera else None
         _, p_dead, dead_labels = dead_ball.detect(
-            match, table, whistles=whistles if whistle_features else None)
+            match, table, whistles=whistles if whistle_features else None, camera=cam)
         if soften_unexplained:
             from mtah.dead_ball import explain
             gaps = explain.explain_gaps(match, table, whistles)
             p_dead = explain.soften(p_dead, explain.unexplained_frames(match.n_frames, gaps))
         events = control_events(match)
-        p_home, frames = shape_evidence(match, events, columns)
+        p_home, frames = shape_evidence(match, events, columns, camera=cam)
         switch = whistle_switch_costs(match.n_frames, whistles) if use_whistles else None
         return decode(match, events, p_dead, dead_labels, p_home, frames, switch)
     method.__name__ = "hmm_v{}".format(version)
@@ -233,4 +252,5 @@ METHODS = {
     "hmm_v4": hmm_v2(version=4),
     "hmm_v5": hmm_v2(version=5),
     "hmm_v6": hmm_v2(version=6),
+    "hmm_v7": hmm_v2(version=7),
 }

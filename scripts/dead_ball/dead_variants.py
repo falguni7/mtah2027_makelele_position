@@ -10,7 +10,8 @@ shape features, team_shape.COLUMNS; no whistle switch costs).
 "v1c step 1" is the first version of the detector (running_alive=False); "v2b running alive
 (current)" is the detector every method uses except hmm_v5; "v3 whistle timing" adds the referee-whistle inputs
 (time since the last whistle and until the next, mtah/dead_ball/detector.py WHISTLE), as in
-hmm_v5. The decoder below is the same for every variant (no whistle switch costs), so the
+hmm_v5; "v4 camera turning" adds how fast the tactical camera turns (detector.CAMERA), as in
+hmm_v7. The decoder below is the same for every variant (no whistle switch costs), so the
 rows differ only in the detector.
 Nothing is written to disk.
 
@@ -48,6 +49,7 @@ from mtah import features as F  # noqa: E402
 from mtah.audio.whistle import match_whistles  # noqa: E402
 from mtah.data import load  # noqa: E402
 from mtah.dead_ball import detector as D  # noqa: E402
+from mtah.features import camera  # noqa: E402
 from mtah.methods import shape_evidence  # noqa: E402
 from mtah.possession.control import control_events  # noqa: E402
 from mtah.possession.shape_model import gap_frames  # noqa: E402
@@ -63,6 +65,7 @@ VARIANTS = {
     "v2b running alive (current)": dict(columns=D.COLUMNS, running_alive=True),
     "v2c both": dict(columns=F.PLAYER + D.GAP_ENDS, running_alive=True),
     "v3 whistle timing": dict(columns=D.COLUMNS, running_alive=True, whistles=True),
+    "v4 camera turning": dict(columns=D.COLUMNS, running_alive=True, camera=True),
 }
 
 
@@ -99,6 +102,8 @@ if __name__ == '__main__':
     for name, options in VARIANTS.items():
         if options.get("whistles"):
             options = dict(options, whistles=match_whistles())
+        if options.get("camera"):
+            options = dict(options, camera=camera.compute(match))
         held_dead, _, _ = D.detect(match, table, use_set_pieces=False, **options)
         early, late = restart_scores(held_dead, starts)
         dead, p_dead, labels = D.detect(match, table, **options)
