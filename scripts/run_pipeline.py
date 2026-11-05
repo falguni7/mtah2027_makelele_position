@@ -12,7 +12,7 @@ data/README.md) and this repository gets the same file, byte for byte. It runs, 
   2. scripts/data/extract_audio.py   decode the tactical video's sound into a mono 24 kHz WAV
                                      in the cache, for the referee-whistle detector (about a
                                      minute on a compute node, as ffmpeg reads the whole video)
-  3. scripts/make_submission.py      run the submitted method (SUBMISSION_METHOD, hmm_v6) on the
+  3. scripts/make_submission.py      run the submitted method (SUBMISSION_METHOD, hmm_v7) on the
                                      full match, write the frame,label CSV and check it with the
                                      official evaluation/validate_submission.py
 
@@ -33,7 +33,7 @@ same SHA-256 as the file made step by step.
     python scripts/run_pipeline.py --reuse-cache --out /tmp/try.csv
     # == 1/3 build cache: skipped, cache/BAR-ATH_tactical exists
     # == 2/3 extract audio: skipped, cache/BAR-ATH_tactical_audio/audio_24k.wav exists
-    # == 3/3 hmm_v6 submission
+    # == 3/3 hmm_v7 submission
     # ... validator output ...
     # /tmp/try.csv  sha256 3f2a...
 """
@@ -50,7 +50,7 @@ from mtah.audio import AUDIO_PATH  # noqa: E402
 from mtah.data.cache import cache_dir  # noqa: E402
 
 # Params
-SUBMISSION_METHOD = "hmm_v6"
+SUBMISSION_METHOD = "hmm_v7"
 DEFAULT_OUT = os.path.join(ROOT, "submissions", "BAR-ATH_possession.csv")
 
 

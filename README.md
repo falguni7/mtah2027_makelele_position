@@ -23,7 +23,7 @@ python scripts/run_pipeline.py
 ```
 
 It builds the numpy cache from the tracking, homography and Smart Tagging, extracts the
-tactical video's sound (for the referee-whistle detector), runs our method `hmm_v6` and checks
+tactical video's sound (for the referee-whistle detector), runs our method `hmm_v7` and checks
 the result with the official validator. The file is `submissions/BAR-ATH_possession.csv`, and
 its SHA-256 is printed at the end. Nothing is random, so every run gives the same file. It takes
 3-4 minutes on a 16-core node. See `scripts/run_pipeline.py` for the steps.
