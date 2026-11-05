@@ -13,17 +13,19 @@ Columns:
   start_frame, stop_frame   video frames the event covers (half-open; frame = time x 25)
   start_time, stop_time     the same as a video timestamp, H:MM:SS.ss
   duration_s                length of the event
-  low_hz, high_hz           median pitch of the whistle's two tones
+  low_hz, high_hz           median pitch of the whistle's two tones, over its whistle-like
+                            steps (strength >= whistle.MIN_STRENGTH)
   strength_db               the weaker tone's rise above its usual level, beyond the rest of
                             the band (higher = clearer)
   period                    "1st half", "2nd half", "half-time", "before" or "after" the match
   near                      Smart Tagging restarts or goals starting within 30 s after the
                             event (type and seconds after the whistle), or kick-off / end of
-                            half moments within 5 s
+                            half moments within 5 s (seconds from the whistle to the moment;
+                            the end of a half is the first frame after its last graded one)
 
     # what a row looks like (illustrative values):
     start_frame,stop_frame,start_time,stop_time,duration_s,low_hz,high_hz,strength_db,period,near
-    11147,11171,0:07:25.88,0:07:26.83,0.95,3891,4289,27.5,1st half,kick-off half 1 (-1.5 s)
+    11147,11171,0:07:25.88,0:07:26.83,0.95,3891,4289,27.5,1st half,kick-off half 1 (+1.5 s)
 """
 
 import os
@@ -50,13 +52,14 @@ OUT_PATH = os.path.join(ROOT, "outputs", "whistles.csv")
 def timestamp(seconds):
     """Seconds on the video timeline as H:MM:SS.ss, the way a video player shows the time.
 
-    seconds is a time from the start of the video (frame / 25). Used for the start_time and
+    seconds is a time from the start of the video (frame / 25), rounded to 0.01 s first (so
+    59.999 gives 0:01:00.00, never 0:00:60.00). Used for the start_time and
     stop_time columns, so a whistle can be found in the video by its timestamp.
 
         timestamp(445.72)        # -> "0:07:25.72"
         timestamp(3725.5)        # -> "1:02:05.50"
     """
-    hours, rest = divmod(seconds, 3600)
+    hours, rest = divmod(round(seconds, 2), 3600)
     minutes, secs = divmod(rest, 60)
     return "{:d}:{:02d}:{:05.2f}".format(int(hours), int(minutes), secs)
 
@@ -95,7 +98,7 @@ if __name__ == '__main__':
                 for i, (_, stop) in enumerate(half_runs)]
 
     tone = whistle.pair_strength(whistle.rise(audio.load()))
-    high_hz = tone[3]
+    step_strength, high_hz = tone[0], tone[3]
     rows = []
     for start, stop, low, strength in whistle.detect(tone):
         near = ["{} ({:+.1f} s)".format(name, t - start) for name, t in moments
@@ -105,14 +108,18 @@ if __name__ == '__main__':
         steps = slice(int(round(start * whistle.STEPS_PER_S)),
                       int(round(stop * whistle.STEPS_PER_S)))
         rows.append({
-            "start_frame": int(np.floor(start * FPS)), "stop_frame": int(np.ceil(stop * FPS)),
+            "start_frame": int(np.floor(round(start * FPS, 6))),
+            "stop_frame": int(np.ceil(round(stop * FPS, 6))),
             "start_time": timestamp(start), "stop_time": timestamp(stop),
             "duration_s": round(stop - start, 2), "low_hz": round(low),
-            "high_hz": round(float(np.median(high_hz[steps]))),
+            "high_hz": round(float(np.median(
+                high_hz[steps][step_strength[steps] >= whistle.MIN_STRENGTH]))),
             "strength_db": round(strength, 1),
             "period": period_of(int(start * FPS), half_runs),
             "near": "; ".join(near),
         })
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
-    pd.DataFrame(rows).to_csv(OUT_PATH, index=False)
+    columns = ["start_frame", "stop_frame", "start_time", "stop_time", "duration_s", "low_hz",
+               "high_hz", "strength_db", "period", "near"]
+    pd.DataFrame(rows, columns=columns).to_csv(OUT_PATH, index=False)
     print("{}: {} whistle events".format(OUT_PATH, len(rows)))

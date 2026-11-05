@@ -97,8 +97,8 @@ if __name__ == '__main__':
     print("   none     {:4d} gaps ({:.0%}), {:.0%} of gap frames, {:.0f} s; length p50/p90 "
           "{:.1f} / {:.1f} s".format(
               len(no), len(no) / len(gaps), in_no.sum() / (in_yes | in_no).sum(),
-              in_no.sum() / FPS, *np.percentile([(g["stop"] - g["start"]) / FPS for g in no],
-                                                [50, 90])))
+              in_no.sum() / FPS, *(np.percentile([(g["stop"] - g["start"]) / FPS for g in no],
+                                                 [50, 90]) if no else (np.nan, np.nan))))
     for lo, hi in BUCKETS:
         inside = [g for g, s in zip(gaps, lengths) if lo <= s < hi]
         print("   {:>3}-{:<4} s  {:4d} gaps, unexplained {:4d} ({:.0%})".format(

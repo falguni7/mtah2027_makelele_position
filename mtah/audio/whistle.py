@@ -20,7 +20,8 @@ tones at scattered pitches; a single-tone whistle or horn has no partner at the 
 Two steps lead there:
 
   * how far each pitch is above ITS OWN usual level (rise()): the power of every pitch against
-    its median over the surrounding BACKGROUND_S seconds. This matters on this match because
+    its usual level over BACKGROUND_S seconds either side (a median of per-second medians, see
+    background()). This matters on this match because
     the sound track carries a constant tone at ~1.85 kHz, there all the time (also at
     half-time): measured against its own usual level it never stands out, while a whistle
     rises by tens of dB within a second;
@@ -117,7 +118,9 @@ def rise(samples):
     """(rise_db, freqs, power): how far every pitch is above its usual level, per 10 ms step.
 
     rise_db is (steps, bins): 10 * log10(power / background(power)) for every pitch in BAND,
-    0 where undefined (silence). freqs is the pitch of each column, power the band_power(). The
+    0 where it is not a finite number: where the power and its usual level are both 0
+    (digital silence), and also where only one of them is 0, so a sound in a pitch that is
+    usually digitally silent gets 0, not a large rise. freqs is the pitch of each column, power the band_power(). The
     input of pair_strength().
 
         a constant 1,850 Hz tone                  # -> rise ~0 dB at 1,850 Hz all the time
@@ -138,7 +141,8 @@ def pair_strength(r):
     PAIR_RATIO (1.06-1.16) times the low one, strength_db is the WEAKER of their two rises
     minus the median rise of the whole band (so both tones must stand out, and a sound that
     lifts every pitch does not count); otherwise it is 0. low_hz and high_hz are the two
-    pitches, level_db the power of the low one (dB on the int16 scale), to tell a loud whistle
+    pitches, level_db the raw spectral power of the low one in dB (not calibrated, only
+    for comparing steps with each other), to tell a loud whistle
     from a faint one. detect() follows the low tone to decide whether the whistle holds its
     pitch.
 
@@ -174,13 +178,18 @@ def detect(tone, min_strength=MIN_STRENGTH, min_duration=MIN_DURATION):
 
     tone is the pair_strength() tuple: its first value is the strength per 10 ms step, its
     second the low tone's pitch. A step is whistle-like when its strength is at least
-    min_strength (15 dB). Consecutive whistle-like steps form one event as long as the low tone
-    moves by at most MAX_JUMP (150 Hz) per step; gaps of up to MAX_DROP steps (30 ms) are
-    bridged when the pitch on both sides matches, as a whistle can dip for an instant. Events
-    shorter than min_duration (0.15 s) are dropped. Each event gives its start and end in
-    seconds on the video timeline, the median pitch of its low tone and its median strength.
+    min_strength (15 dB). Runs of whistle-like steps are first split wherever the low tone
+    jumps by more than MAX_JUMP (150 Hz) from one step to the next. Then neighbouring pieces are
+    joined again when at most MAX_DROP steps (30 ms) lie between them (0 for a split at a jump)
+    and their median low-tone pitches differ by at most MAX_JUMP, as a whistle can dip for an
+    instant; a piece that keeps a different pitch stays apart. Events shorter than
+    min_duration (0.15 s) are dropped. Each event gives its start and end in seconds on the
+    video timeline, the median pitch of its low tone and its median strength, both over its
+    whistle-like steps only. The times are those of the 10 ms steps, and a step's spectrum
+    covers the 43 ms (N_FFT samples) from that time on, so a start can come up to ~30 ms
+    before the sound does.
 
-        strength_db: 5 5 30 31 29 5 30 30 ... (35 steps at ~30 dB) ... 5
+        strength_db: 5 5 30 31 29 5 30 30 ... (36 steps at ~30 dB) ... 5
         low_hz:          3800 3820 3810   3805 ...
         detect(tone)
         # -> [(0.02, 0.42, 3810.0, 30.0)]   one blast of 0.40 s, low tone ~3.8 kHz; the
@@ -213,14 +222,16 @@ def detect(tone, min_strength=MIN_STRENGTH, min_duration=MIN_DURATION):
 def events_to_frames(events, n_frames):
     """Bool per video frame: True on frames that a whistle event overlaps.
 
-    Frame f covers [f / 25, (f + 1) / 25) seconds.
+    Frame f covers [f / 25, (f + 1) / 25) seconds. Times are rounded to 1e-6 frames first, so
+    an event edge exactly on a frame boundary (e.g. 0.28 s = frame 7) does not spill into the
+    next frame through floating-point error.
 
         events = [(1.00, 1.10, 3800.0, 30.0)]     # a whistle from 1.00 s to 1.10 s
         events_to_frames(events, 30)[24:28]       # -> [False, True, True, True]  frames 25-27
     """
     out = np.zeros(n_frames, dtype=bool)
     for start, stop, _, _ in events:
-        out[int(np.floor(start * FPS)):int(np.ceil(stop * FPS))] = True
+        out[int(np.floor(round(start * FPS, 6))):int(np.ceil(round(stop * FPS, 6)))] = True
     return out
 
 

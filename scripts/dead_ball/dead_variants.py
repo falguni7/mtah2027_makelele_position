@@ -5,9 +5,10 @@
 
 Each variant (VARIANTS below) is the detector of mtah/dead_ball/detector.py with different
 feature columns and with or without the "sustained running counts as alive" labels. Each one is
-trained twice (without and with the set-piece labels) and then fed to the step-4 decoder.
-"v1c step 1" is the step-1 detector (running_alive=False); "v2b running alive (current)" is
-the detector hmm_v2 to hmm_v4 use; "v3 whistle timing" adds the referee-whistle inputs
+trained twice (without and with the set-piece labels) and then fed to hmm_v3's decoder (all
+shape features, team_shape.COLUMNS; no whistle switch costs).
+"v1c step 1" is the first version of the detector (running_alive=False); "v2b running alive
+(current)" is the detector every method uses except hmm_v5; "v3 whistle timing" adds the referee-whistle inputs
 (time since the last whistle and until the next, mtah/dead_ball/detector.py WHISTLE), as in
 hmm_v5. The decoder below is the same for every variant (no whistle switch costs), so the
 rows differ only in the detector.
@@ -21,7 +22,7 @@ For each variant:
   tag D        share called D inside Smart Tagging in-possession phases: all of them, and those
                inside ball gaps far (>= 2 s) from control events. Phases can include short
                stoppages, so this should be low but not zero.
-  hmm_v2       the step-4 decoder with this detector: possessions, tag agree / disagree / D
+  hmm_*        hmm_v3's decoder with this detector: possessions, tag agree / disagree / D
 
 The printed table has one row per variant and these columns:
   early, late          the two restart numbers above

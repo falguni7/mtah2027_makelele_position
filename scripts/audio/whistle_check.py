@@ -16,7 +16,7 @@ steps:
 1. The measure over the whole match: percentiles of the strength, and at which pitch the
    strong moments have their low tone. A referee whistle should show up as a pile-up there.
 2. Certain whistles: the two half kick-offs, the four kick-offs after goals (each GOALS tag
-   ends 1 s after its kick-off) and the end of each half (the last graded frame). For each:
+   ends 1 s after its kick-off) and the end of each half (the first frame after its last graded one). For each:
    the highest strength within +/- ANCHOR_WINDOW seconds, how far from the moment it is, at
    which two pitches, and the events detect() finds there (start relative to the moment,
    duration).
@@ -121,7 +121,8 @@ if __name__ == '__main__':
     print("\n2. certain whistles: highest strength within +/- {:.0f} s, and events >= {:.0f} "
           "dB there".format(ANCHOR_WINDOW, whistle.MIN_STRENGTH))
     for name, t in anchors:
-        lo, hi = int((t - ANCHOR_WINDOW) * STEPS_PER_S), int((t + ANCHOR_WINDOW) * STEPS_PER_S)
+        lo = max(0, int((t - ANCHOR_WINDOW) * STEPS_PER_S))
+        hi = int((t + ANCHOR_WINDOW) * STEPS_PER_S)
         i = lo + int(np.argmax(strength[lo:hi]))
         near = [e for e in events if t - ANCHOR_WINDOW <= e[0] <= t + ANCHOR_WINDOW]
         print("   {:<22} max {:5.1f} dB at {:+5.1f} s, {:4.0f} + {:4.0f} Hz; events {} {}".format(

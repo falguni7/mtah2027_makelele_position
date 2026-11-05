@@ -24,17 +24,22 @@ uses labels; nothing is written to disk.
    b. where the strongest acceleration lies in the search window before each change (offset
       in frames from the event start, percentiles) and how strong it is, against the same window
       at random frames: this is what SNAP_BEFORE and MIN_TOUCH_ACCEL in touches.py are set from;
-   c. the veto question: the share of changes with no acceleration above each threshold
-      anywhere between the previous event's end and the new event's start (ball tracked all the
-      way). If idea 7 holds, this should be close to 0.
+   c. the veto question: the share of changes with no acceleration at or above each threshold
+      anywhere from the previous event's stop to 2 frames after the new event's start (ball
+      tracked all the way; an acceleration the tracker cannot compute, NaN, counts as no
+      touch). If idea 7 holds, this should be close to 0.
    d. what snap_changes() does: how many changes move, and by how much.
    e. a geometric alternative to the acceleration: how many frames before the event start the
       ball arrives at the new team (stays within ARRIVAL_RADIUS of one of its players from then
       on). The control rule waits until the ball also moves with the player, so this says how
-      late its change point is compared with the arrival of the ball.
+      late its change point is compared with the arrival of the ball. "Share at the search
+      limit" is the share whose arrival lies SEARCH (25) frames or more before the start, i.e.
+      the ball was already near the new team when the 1 s search window began (windows cut
+      short by the previous event are not counted there).
 
 2. Idea 8, shape-change rate, from the ball-free team-shape table (mtah/features/team_shape.py).
-   For each signal, its rate of change is |x(t + 0.5 s) - x(t - 0.5 s)| per second; "all diffs"
+   For each signal, its rate of change is |x(t + 12 frames) - x(t - 12 frames)| per second
+   (+/- 0.48 s, RATE_HALF); "all diffs"
    combines every home-minus-away feature, each scaled by its spread over the graded frames.
    a. the rate at offsets from -5 s to +5 s around changes and same-team starts, in standard
       deviations above its mean on random frames (0 = no different from any other moment);
@@ -42,7 +47,7 @@ uses labels; nothing is written to disk.
       frames and from same-team starts there (AUC: 0.5 = no better than a coin, 1 = perfect);
    c. the SIGNED change, oriented so that positive means "towards the team that just won the
       ball" (e.g. forward_vel_diff rising when home wins it): the direction of the change,
-      in standard deviations of the same 1 s change at random frames (so 0.5 means half a
+      in standard deviations of the same 1 s (24-frame) change at random frames (so 0.5 means half a
       typical change, consistently in one direction).
 
 How to read it: idea 7 is supported if 1a shows a clear peak just before the event start for
@@ -70,7 +75,7 @@ N_RANDOM = 5000
 SEARCH = 25                         # frames before the event start searched in 1b (1 s)
 THRESHOLDS = (15.0, 30.0, 50.0)     # m/s^2
 ARRIVAL_RADIUS = 2.0                # metres, ball to the nearest player of the new team (1e)
-RATE_HALF = FPS // 2                # rate of change over +/- 0.5 s
+RATE_HALF = FPS // 2                # rate of change over +/- 12 frames (0.48 s)
 SHAPE_SIGNALS = ["advance_diff", "forward_vel_diff", "approach_diff", "hull_area_diff",
                  "spread_x_diff", "marking_diff"]
 SIGNED = ["advance_diff", "forward_vel_diff", "approach_diff", "hull_area_diff"]
@@ -116,7 +121,7 @@ def rate(values, half=RATE_HALF):
     """|values[t + half] - values[t - half]| per second; NaN at the ends or where either is NaN.
 
     values is one value per frame (e.g. a team-shape feature such as the hull area), half the
-    number of frames looked ahead and back (default RATE_HALF, 0.5 s). The result is how fast
+    number of frames looked ahead and back (default RATE_HALF, 12 frames = 0.48 s). The result is how fast
     the value changes around each frame, per second, regardless of direction: idea 8's "rapid
     shape change" signal. The first and last `half` frames have no window and are NaN.
 
@@ -179,9 +184,10 @@ if __name__ == '__main__':
         if np.isfinite(window).sum() >= 0.8 * len(window) and len(window) >= 5:
             peaks["changes"].append((low + int(np.nanargmax(window)) - start, np.nanmax(window)))
     for start in random_tracked:
-        window = accel[start - SEARCH:start + 3]
+        low = max(start - SEARCH, 0)
+        window = accel[low:start + 3]
         if len(window) and np.isfinite(window).sum() >= 0.8 * len(window):
-            peaks["random"].append((int(np.nanargmax(window)) - SEARCH, np.nanmax(window)))
+            peaks["random"].append((low + int(np.nanargmax(window)) - start, np.nanmax(window)))
     for name, rows in peaks.items():
         rows = np.array(rows)
         print("    {:<8} n {:>5}  offset p10/p25/p50/p75/p90 {}  peak m/s^2 p10/p50/p90 {}".format(
@@ -240,8 +246,8 @@ if __name__ == '__main__':
     signals = {name: rate(table[name].to_numpy()) for name in SHAPE_SIGNALS}
     signals["all diffs"] = combined
     random_graded = rng.choice(np.flatnonzero(graded), N_RANDOM, replace=False)
-    step = FPS // 2
-    offsets = np.arange(-5 * FPS, 5 * FPS + 1, step)
+    # every 0.5 s from -5 s to +5 s, rounded to whole frames (0 is in the grid)
+    offsets = np.round(np.arange(-5.0, 5.01, 0.5) * FPS).astype(int)
 
     print("\n2a. shape-change rate around event starts, in SDs above random frames; "
           "offsets in seconds")
@@ -276,7 +282,7 @@ if __name__ == '__main__':
     print("\n2c. signed change over 1 s, towards the team that won the ball (+ = home "
           "won it and the value rose, or away won it and it fell)")
     sign = np.array([1.0 if team == 0 else -1.0 for _, _, team in changes])
-    afters = np.arange(-2 * FPS, 4 * FPS + 1, FPS // 2)
+    afters = np.round(np.arange(-2.0, 4.01, 0.5) * FPS).astype(int)
     print("    in SDs of the same 1 s change at random frames")
     print("    centred at (s)          " + " ".join("{:>5.1f}".format(a / FPS) for a in afters))
     for name in SIGNED:

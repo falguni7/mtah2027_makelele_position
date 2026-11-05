@@ -1,5 +1,6 @@
 """Ball touches from the tracked ball's acceleration (idea 7): when exactly does possession change?
 
+    from mtah.possession.control import control_events
     from mtah.possession.touches import ball_acceleration, snap_changes
     accel = ball_acceleration(match)               # m/s^2 per frame, NaN where unknown
     events = snap_changes(control_events(match), accel)
@@ -48,7 +49,8 @@ def ball_acceleration(match):
     frame; the size of the difference, divided by that 0.16 s, is the acceleration. A change of
     direction counts as much as a change of speed, so a pass received and redirected first
     time shows up just as clearly as a ball stopped dead. Any frame that needs a ball position
-    the tracker does not have (frames i-4 .. i+4, at the window ends) is NaN.
+    the tracker does not have (frames i-4, i and i+4: the ends and the middle of the two
+    velocity windows; frames in between are bridged) is NaN, as are the first and last 4 frames.
 
     Toy example, 25 fps: a ball rolling at 10 m/s along x is stopped dead on frame 10.
 
@@ -72,8 +74,9 @@ def snap_changes(events, accel):
     events are (start, stop, team) as from control_events(), sorted by start; accel is
     ball_acceleration(). For every event whose team differs from the previous event's (a
     possession change), the frames from SNAP_BEFORE (12) before its start to SNAP_AFTER (2) after
-    are searched for the strongest ball acceleration, never going back to or before the end of
-    the previous event (the ball was still the other team's then). If that acceleration is at
+    are searched for the strongest ball acceleration, never going back onto a frame of the
+    previous event (the ball was still the other team's then; at the earliest the new start is
+    the previous event's stop, the first frame after it). If that acceleration is at
     least MIN_TOUCH_ACCEL (30 m/s^2), the event now starts there; otherwise -- no clear touch, for
     example because the ball was not tracked -- it is left alone. Events that keep the same team
     are never moved, and an event is never made later than it was.

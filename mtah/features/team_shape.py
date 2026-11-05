@@ -41,8 +41,9 @@ Positions are in metres, x measured from halfway along the length and y across t
 outfield players count for a team (goalkeepers are left out), but the opponents for marking
 include the goalkeeper. "Oriented" means multiplied by the team's attacking direction, so a
 positive value is in the opponent's half for both teams. Off the two graded halves the direction
-sign is 0, so advance, front, back, forward_vel and camera_advance_h are 0 there (not NaN);
-near_camera is 0 where the homography is invalid. The possession shape model
+sign is 0, so advance, front, back, depth, forward_vel and camera_advance_h are 0 there (not
+NaN), except that camera_advance_h is NaN wherever there is no camera point (invalid
+homography), on or off the halves; near_camera is 0 where the homography is invalid. The possession shape model
 (mtah.possession.shape_model) uses this table as evidence inside ball gaps.
 
 In this file: home_direction and camera_point (per-frame helpers), velocity, team_columns (one
@@ -135,7 +136,7 @@ def camera_point(match):
 def velocity(positions):
     """Per-frame velocity (m/s) of each position, from the displacement over +/- VELOCITY_HALF.
 
-    positions is (n_frames, ...) in metres, usually (n_frames, players, 2); the result has the
+    positions is (n_frames, ...) in metres (an array, or a list, which is converted), usually (n_frames, players, 2); the result has the
     same shape: the centred difference over 2 * VELOCITY_HALF frames, divided by that time. The
     first and last VELOCITY_HALF frames are NaN, and so is any frame where either END of the window
     (frame i-2 or i+2) is NaN; a NaN strictly inside the window does not spread.
@@ -143,6 +144,7 @@ def velocity(positions):
         x = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]     # one player moving 0.2 m per frame, 25 fps
         velocity(x)                            # -> [nan, nan, 5.0, 5.0, nan, nan]
     """
+    positions = np.asarray(positions, dtype=np.float64)
     k = VELOCITY_HALF
     out = np.full(positions.shape, np.nan)
     out[k:-k] = (positions[2 * k:] - positions[:-2 * k]) * FPS / (2 * k)
@@ -177,7 +179,7 @@ def team_columns(xy, present, speed, sign, opponents_xy, camera):
 
     xy (n, k, 2), present (n, k) and speed (n, k) are the team's k outfield players; opponents_xy
     (n, m, 2) is every opposing player, NaN where absent; camera (n, 2) is camera_point, also
-    relative to halfway. Returns a dict {name in PER_TEAM: (n,) float array}, the quantities in
+    relative to halfway. Returns a dict {name in PER_TEAM except marking_rate: (n,) float array}, the quantities in
     the module docstring for this one team, before the +/- 0.5 s (1 s wide) smoothing. near_camera
     is a count, so it is 0 rather than NaN where there is no camera point. marking_rate is not
     here: compute() takes it from the smoothed marking.
@@ -235,8 +237,9 @@ def compute(match):
     direction and averaged over +/- SMOOTH frames (+/- 0.5 s), then home minus away (_diff), and
     the two camera columns. marking_rate is the rate of change of the smoothed marking, over
     +/- VELOCITY_HALF frames. Row i is video frame i. Off the two graded halves the direction
-    sign is 0, so advance, front, back, forward_vel and camera_advance_h are 0 there (not NaN);
-    near_camera is 0 where the homography is invalid.
+    sign is 0, so advance, front, back, depth, forward_vel and camera_advance_h are 0 there (not
+    NaN), except that camera_advance_h is NaN wherever there is no camera point (invalid
+    homography), on or off the halves; near_camera is 0 where the homography is invalid.
 
         advance_h = 5.0, advance_a = -3.0    # home pushed up, away dropped deep
         advance_diff                         # -> 8.0, a hint that home has the ball

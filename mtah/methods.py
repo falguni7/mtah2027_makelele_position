@@ -154,7 +154,7 @@ def shape_evidence(match, events, columns=None):
 def hmm_v2(version=2):
     """Step 4: hmm_v1 plus team evidence from the shape model away from control events.
 
-    Factory: returns the method named "hmm_v2". Same Viterbi decoding as hmm_v1, but in long
+    Factory: returns the method named "hmm_v<version>" ("hmm_v2" by default). Same Viterbi decoding as hmm_v1, but in long
     stretches with no control event (mostly ball gaps) the shape model's P(home) is added as
     evidence for which team has the ball, instead of leaving the decoder to carry the last team.
     version=2 uses the original step-4 shape features (team_shape.COLUMNS_V1); version=3 adds

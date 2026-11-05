@@ -5,7 +5,9 @@ whistles. Prints aggregates only.
     sbatch scripts/slurm/run.sbatch scripts/validation/boundary_check.py hmm_v3 hmm_v4
 
 A dead-ball stretch is a run of D inside a graded half; its start is where play stops and its
-end where play restarts. Possessions are split by these stretches, so where they start and
+end where play restarts. Runs that touch the edge of a half count too (the second half's D
+before its kick-off starts at the half's first graded frame; a half that ends in D ends at the
+half's end), so a few starts and ends are no real stop or restart. Possessions are split by these stretches, so where they start and
 end matters for spellF1. For each method this prints:
 
   D share          share of graded frames labelled D
@@ -131,8 +133,9 @@ def match_stretches(base, other):
     """(pairs, new, gone): stretches of other matched to overlapping stretches of base.
 
     pairs is [(base_stretch, other_stretch)] for stretches that overlap (the first overlap of
-    each); new counts other's stretches overlapping none of base's, gone base's overlapping none
-    of other's.
+    each), matched one-to-one in time order; new counts other's stretches left unmatched, gone
+    base's. A stretch split in two therefore shows as one matched plus one new, and two
+    stretches merged into one as one matched plus one gone.
 
         base  = [(10, 20), (50, 60)]
         other = [(8, 20), (90, 95)]

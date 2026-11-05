@@ -79,6 +79,7 @@ def velocity(positions):
         x = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # metres, moving 0.1 m per frame (2.5 m/s)
         velocity(x)                         # -> [nan, nan, 2.5, 2.5, nan, nan]
     """
+    positions = np.asarray(positions, dtype=np.float64)
     k = VELOCITY_HALF
     out = np.full(positions.shape, np.nan)
     out[k:-k] = (positions[2 * k:] - positions[:-2 * k]) * FPS / (2 * k)

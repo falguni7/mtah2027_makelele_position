@@ -11,8 +11,8 @@ looks like a stoppage from the players' movement and the gap's length alone. But
 also loses the ball in open play, in a crowd or high in the air. A real stoppage almost always
 leaves a trace of WHY play stopped:
 
-  whistle    the referee whistled shortly before or during the gap, or just before it ended
-             (a foul, offside, an injury, a restart)                -- mtah/audio/whistle.py
+  whistle    the referee whistled shortly before or during the gap, or within a few seconds
+             after it ended (a foul, offside, an injury, a restart)                -- mtah/audio/whistle.py
   line       the ball was last seen, or seen again, near a line of the pitch (it went out for a
              throw-in, corner or goal kick, or was placed there for the restart)
   tag        Smart Tagging has a set piece or a goal starting during the gap or around it
@@ -69,8 +69,9 @@ def explain_gaps(match, table, whistles, min_length=MIN_GAP):
       tag       a SET PIECES or GOALS tag (any type, kick-offs included) starts between
                 TAG_WINDOW[0] (5 s) before the gap and TAG_WINDOW[1] (5 s) after it
 
-    A gap at the very start or end of the tracking (no ball seen on one side) uses only the
-    side that exists for "line".
+    For "line", a side only counts if the ball was seen there inside the same graded half: a gap
+    that starts at a half's first graded frame (or ends at its last) uses only the other side,
+    so a ball seen before half-time never explains a gap in the second half.
 
         # a 10 s gap from 100 s to 110 s, the ball last seen 20 m and next seen 25 m inside,
         # one whistle at 101.5 s, no tags nearby
@@ -84,6 +85,7 @@ def explain_gaps(match, table, whistles, min_length=MIN_GAP):
                                   "start_frame"].to_numpy(dtype=np.float64)) / FPS
     last_line = table["last_seen_line_dist"].to_numpy()
     next_line = table["next_seen_line_dist"].to_numpy()
+    graded = np.asarray(match.graded)
 
     def any_in(starts, lo, hi):
         """True if at least one value of the sorted array starts lies in [lo, hi] (both ends
@@ -97,7 +99,11 @@ def explain_gaps(match, table, whistles, min_length=MIN_GAP):
     out = []
     for start, stop in ball_gaps(match, min_length):
         first_s, last_s = start / FPS, (stop - 1) / FPS
-        ends = np.array([last_line[start], next_line[start]])
+        # a side only counts if the ball was seen there inside the same graded half
+        seen_before = start > 0 and graded[start - 1]
+        seen_after = stop < len(graded) and graded[stop]
+        ends = np.array([last_line[start] if seen_before else np.nan,
+                         next_line[start] if seen_after else np.nan])
         out.append({
             "start": start, "stop": stop,
             "whistle": any_in(whistle_starts, first_s + WHISTLE_WINDOW[0],

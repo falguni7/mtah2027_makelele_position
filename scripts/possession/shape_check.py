@@ -10,7 +10,8 @@ written to disk.
 
 1. Held-out accuracy on the pseudo-labels (out-of-fold over contiguous time blocks), for each
    feature set in FEATURE_SETS: the step-4 features, each of ideas 9 and 10 added alone, and all.
-2. Where it matters -- frames at least 2 s from any control event, i.e. inside ball gaps and
+2. Where it matters -- frames more than 2 s before and at least 2 s after every control event
+   (mtah.possession.shape_model.gap_frames), i.e. inside ball gaps and
    long loose phases -- agreement with Smart Tagging's in-possession team for: the carry rule
    (control_dead), the shape model on its own with each feature set, hmm_v2 and hmm_v3. Smart
    Tagging's in-possession phases are not used by any of them (the dead-ball detector does use
@@ -79,7 +80,8 @@ def agreement_on(labels, tagged, frames):
 #   + idea 10         adds depth and hull_area: is a team compact (likely defending) or spread
 #                     out (likely attacking)
 #   all (hmm_v3)      both ideas, the set hmm_v3 uses
-# Example row of the output: "v1 + depth, hull_area (idea 10)   35 features  overall 0.869 ...".
+# Example row of the output (name padded to 38 characters, numbers illustrative):
+#   "v1 + depth, hull_area (idea 10)         35 features  overall 0.869 ...".
 FEATURE_SETS = {
     "v1 (step 4)": team_shape.COLUMNS_V1,
     "v1 + approach, marking_rate (idea 9)": team_shape.columns_of(
