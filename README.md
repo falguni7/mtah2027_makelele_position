@@ -10,6 +10,26 @@ question to answer with it.
 
 ---
 
+## Reproducing our submission
+
+Put the data bundle in `data/` as described in [data/README.md](data/README.md), install the
+environment, then run one command:
+
+```bash
+conda create -n mtah2027 python=3.11.12 ffmpeg=7.1.1 -c conda-forge
+conda activate mtah2027
+pip install -r requirements-lock.txt
+python scripts/run_pipeline.py
+```
+
+It builds the numpy cache from the tracking, homography and Smart Tagging, extracts the
+tactical video's sound (for the referee-whistle detector), runs our method `hmm_v6` and checks
+the result with the official validator. The file is `submissions/BAR-ATH_possession.csv`, and
+its SHA-256 is printed at the end. Nothing is random, so every run gives the same file. It takes
+3-4 minutes on a 16-core node. See `scripts/run_pipeline.py` for the steps.
+
+---
+
 ## The task
 
 **For every frame of the match, say who has the ball.**
