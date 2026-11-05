@@ -53,7 +53,10 @@ Values are chosen from these arguments, not tuned on labels.
 What is in it: emissions() builds the (frames, 3) evidence table above, transition_matrix() the
 switch costs, whistle_switch_costs() the cheaper D switches near whistles, viterbi() finds the
 best path through one run of frames, and decode() runs it per graded half and returns the
-labels. With the step-4 shape model, and with whistles:
+labels. posteriors() and decode_posteriors() use the same evidence and switch costs for a
+different question: not the single best path, but for every frame how likely each of H, A and
+D is given everything before and after it (forward-backward), which says how sure the labels
+are (used for abstaining with X, mtah/temporal/abstain.py). With the step-4 shape model, and with whistles:
 
     labels = decode(match, events, p_dead, dead_labels, p_home, shape_frames)
     switch = whistle_switch_costs(match.n_frames, whistle_events)
@@ -276,3 +279,77 @@ def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None, s
         path = viterbi(score[start:stop], transition, costs)
         labels[start:stop] = np.array(["H", "A", "D"])[path]
     return labels
+
+
+def _logsumexp(a, axis):
+    """log(sum(exp(a))) along axis, computed without overflow (the largest term factored out).
+
+        _logsumexp(np.log([[1.0, 3.0]]), axis=1)     # -> [log(4)] = [1.386]
+    """
+    top = np.max(a, axis=axis, keepdims=True)
+    return np.squeeze(top, axis=axis) + np.log(np.sum(np.exp(a - top), axis=axis))
+
+
+def posteriors(score, transition, switch=None):
+    """(frames, 3) probability of H, A and D on every frame, given all the frames of the run.
+
+    The forward-backward counterpart of viterbi(), on the same inputs: score is (frames, 3) log
+    evidence from emissions(), transition the (3, 3) log transition scores, switch optional
+    (enter, leave) costs from whistle_switch_costs() for these frames, used exactly as in
+    viterbi(). The scores are treated as log weights of every possible path; a frame's
+    probability of state s is the total weight of the paths that are in s there, divided by the
+    total weight of all paths. Each row sums to 1. Where one path is much better than all
+    others the result is close to 1 for its state; where the evidence is balanced it is spread.
+
+        transition = transition_matrix()
+        score = [[0, -9, -9], [-1, -1, -9], [0, -9, -9]]   # frame 1 is undecided between H and A
+        posteriors(score, transition)[1]
+        # -> ~[0.98, 0.02, 0.00]   A on frame 1 would cost two team switches (2 + 2), so
+        #    that path weighs e^-4 = 0.018 times the all-H path
+    """
+    score = np.asarray(score, dtype=np.float64)
+    n = len(score)
+    if switch is not None:
+        enter, leave = (np.asarray(c, dtype=np.float64) for c in switch)
+
+    def trans_at(t):
+        """(3, 3) log transition scores into frame t (frame t - 1 to frame t)."""
+        if switch is None:
+            return transition
+        m = transition.copy()
+        m[0, 2] = m[1, 2] = -enter[t]
+        m[2, 0] = m[2, 1] = -leave[t]
+        return m
+
+    alpha = np.empty((n, 3))
+    alpha[0] = score[0]
+    for t in range(1, n):
+        alpha[t] = score[t] + _logsumexp(alpha[t - 1][:, None] + trans_at(t), axis=0)
+    beta = np.zeros((n, 3))
+    for t in range(n - 1, 0, -1):
+        beta[t - 1] = _logsumexp(trans_at(t) + (score[t] + beta[t])[None, :], axis=1)
+    log_post = alpha + beta
+    log_post -= _logsumexp(log_post, axis=1)[:, None]
+    return np.exp(log_post)
+
+
+def decode_posteriors(match, events, p_dead, dead_labels, p_home=None, shape_frames=None,
+                      switch=None):
+    """(n_frames, 3) probabilities of H, A, D per frame, from the same evidence as decode().
+
+    Same inputs as decode(); each graded half is computed on its own with posteriors(), so
+    nothing carries over half-time. Frames outside the graded halves are NaN. Column 0 is H,
+    1 A, 2 D, the order of the states.
+
+        post = decode_posteriors(match, events, p_dead, dead_labels, p_home, frames, switch)
+        post[50000]          # -> e.g. [0.97, 0.02, 0.01]   sure it is home
+        post[60000]          # -> e.g. [0.45, 0.40, 0.15]   unsure
+    """
+    graded = np.asarray(match.graded)
+    score = emissions(match.n_frames, events, p_dead, dead_labels, graded, p_home, shape_frames)
+    transition = transition_matrix()
+    out = np.full((match.n_frames, 3), np.nan)
+    for start, stop in runs_of(graded):
+        costs = None if switch is None else (switch[0][start:stop], switch[1][start:stop])
+        out[start:stop] = posteriors(score[start:stop], transition, costs)
+    return out

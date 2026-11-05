@@ -7,7 +7,7 @@ Register a method in METHODS so scripts can run it by name.
 
 Each entry is built by a small factory (baseline_dead(50), hmm_v1(), ...) that returns the actual
 method, a function of the match only, named after its METHODS key so outputs can be labelled by
-method.__name__. The methods built here only ever write "H", "A" and "D"; frames outside the
+method.__name__. The methods built here write "H", "A" and "D" (and hmm_v8 also "X"); frames outside the
 graded halves come out as "D" (or whatever the underlying step leaves there) and are not scored.
 The methods follow the roadmap steps:
 
@@ -21,6 +21,7 @@ The methods follow the roadmap steps:
     hmm_v5             hmm_v4 with whistle timing as inputs of the dead-ball classifier
     hmm_v6             hmm_v4 with weaker dead-ball evidence in ball gaps with no reason to stop
     hmm_v7             hmm_v6 with how the tactical camera turns, in the detector and shape model
+    hmm_v8             hmm_v7 with X on frames where it is probably wrong (possessions unchanged)
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -183,7 +184,12 @@ def hmm_v2(version=2):
     turns (mtah.features.camera): its turning speed over 1 s and 3 s as dead-ball classifier
     inputs (mtah.dead_ball.detector.CAMERA), as the camera rests in stoppages and turns in play,
     and the speed of its aim towards the home team's goal as a shape-model input
-    (SHAPE_CAMERA). Versions 4 to 7 need the extracted sound (scripts/data/extract_audio.py).
+    (SHAPE_CAMERA); version=8 is hmm_v7 with abstention (mtah.temporal.abstain): from the same
+    evidence the forward-backward posteriors say how likely each label is, and frames whose
+    label is probably wrong (posterior below half its expected F1) become "X", never on the
+    first frame of a run, so the scorer's fill-forward gives back hmm_v7's labels exactly and
+    only macroF1 can change. Versions 4 to 8 need the extracted sound
+    (scripts/data/extract_audio.py).
 
         method = hmm_v2()
         method.__name__                        # -> "hmm_v2"
@@ -192,6 +198,7 @@ def hmm_v2(version=2):
         hmm_v2(version=5).__name__             # -> "hmm_v5"
         hmm_v2(version=6).__name__             # -> "hmm_v6"
         hmm_v2(version=7).__name__             # -> "hmm_v7"
+        hmm_v2(version=8).__name__             # -> "hmm_v8"
         labels = method(match)                 # (n_frames,) of "H" / "A" / "D"
     """
     from mtah.features import team_shape
@@ -200,21 +207,26 @@ def hmm_v2(version=2):
     whistle_features = version == 5         # whistle timing in the dead-ball classifier
     soften_unexplained = version >= 6       # weaker P(dead) in gaps with no reason to stop
     use_camera = version >= 7               # camera turning in the detector and shape model
+    use_abstain = version >= 8              # X where the label is probably wrong
 
-    def method(match):
-        """Labels for one match: hmm_v1's decoding plus shape-model evidence in the gaps.
+    def evidence(match):
+        """Everything the decoder needs for one match, as a tuple for decode().
 
-        match is an mtah.data.Match; returns an (n_frames,) array of "H" / "A" / "D", with "D"
-        outside the graded halves.
+        (events, p_dead, dead_labels, p_home, shape_frames, switch): the step-2 control events,
+        the step-1 P(dead) (softened in unexplained gaps from version 6) and confident labels,
+        the step-4 shape model's P(home) and the frames to use it on, and the whistle switch
+        costs (None before version 4). Exposed as method.evidence, so checks can compute the
+        posteriors of exactly the evidence the method decodes.
 
-            hmm_v2()(match).shape              # -> (match.n_frames,)
+            args = hmm_v2(version=7).evidence(match)
+            decode(match, *args)               # -> the same labels as hmm_v7(match)
         """
         from mtah import dead_ball, features
         from mtah.audio.whistle import match_whistles
-        from mtah.possession.control import control_events
-        from mtah.temporal.hmm import decode, whistle_switch_costs
-        whistles = match_whistles() if use_whistles else None
         from mtah.features import camera as camera_features
+        from mtah.possession.control import control_events
+        from mtah.temporal.hmm import whistle_switch_costs
+        whistles = match_whistles() if use_whistles else None
         table = features.compute(match)
         cam = camera_features.compute(match) if use_camera else None
         _, p_dead, dead_labels = dead_ball.detect(
@@ -226,7 +238,24 @@ def hmm_v2(version=2):
         events = control_events(match)
         p_home, frames = shape_evidence(match, events, columns, camera=cam)
         switch = whistle_switch_costs(match.n_frames, whistles) if use_whistles else None
-        return decode(match, events, p_dead, dead_labels, p_home, frames, switch)
+        return events, p_dead, dead_labels, p_home, frames, switch
+
+    def method(match):
+        """Labels for one match: hmm_v1's decoding plus shape-model evidence in the gaps.
+
+        match is an mtah.data.Match; returns an (n_frames,) array of "H" / "A" / "D" (and "X"
+        from version 8 on), with "D" outside the graded halves.
+
+            hmm_v2()(match).shape              # -> (match.n_frames,)
+        """
+        from mtah.temporal.hmm import decode, decode_posteriors
+        args = evidence(match)
+        labels = decode(match, *args)
+        if use_abstain:
+            from mtah.temporal.abstain import abstain
+            labels = abstain(labels, decode_posteriors(match, *args), match.graded)
+        return labels
+    method.evidence = evidence
     method.__name__ = "hmm_v{}".format(version)
     return method
 
@@ -253,4 +282,5 @@ METHODS = {
     "hmm_v5": hmm_v2(version=5),
     "hmm_v6": hmm_v2(version=6),
     "hmm_v7": hmm_v2(version=7),
+    "hmm_v8": hmm_v2(version=8),
 }
