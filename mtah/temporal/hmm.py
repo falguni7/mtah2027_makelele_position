@@ -284,6 +284,11 @@ def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None, s
 def _logsumexp(a, axis):
     """log(sum(exp(a))) along axis, computed without overflow (the largest term factored out).
 
+    a holds log values (log weights of paths); the result is the log of their total, with that
+    axis removed. Adding up exp(a) directly would overflow or underflow for the large negative
+    scores of long runs, so the largest value is taken out first: log(sum(exp(a - top))) + top.
+    Used by posteriors() to add up the weights of all paths into or out of each state.
+
         _logsumexp(np.log([[1.0, 3.0]]), axis=1)     # -> [log(4)] = [1.386]
     """
     top = np.max(a, axis=axis, keepdims=True)
@@ -313,7 +318,15 @@ def posteriors(score, transition, switch=None):
         enter, leave = (np.asarray(c, dtype=np.float64) for c in switch)
 
     def trans_at(t):
-        """(3, 3) log transition scores into frame t (frame t - 1 to frame t)."""
+        """(3, 3) log transition scores for the step from frame t - 1 to frame t.
+
+        Without switch costs this is always `transition`. With them, entering D costs enter[t]
+        and leaving D costs leave[t] on this step, exactly as in viterbi(); H <-> A keeps its
+        fixed cost.
+
+            # enter = [4, 1, 4], leave = [4, 4, 4]: entering D into frame 1 is cheap
+            trans_at(1)[0, 2], trans_at(2)[0, 2]      # -> -1, -4
+        """
         if switch is None:
             return transition
         m = transition.copy()

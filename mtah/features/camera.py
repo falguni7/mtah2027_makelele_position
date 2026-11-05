@@ -120,7 +120,8 @@ def compute(match):
         table = compute(match)
         list(table.columns)          # -> COLUMNS
         table.shape                  # -> (match.n_frames, 6)
-        table["cam_turn"].median()   # -> e.g. 150 px/s over the match (illustrative)
+        np.nanmedian(table["cam_turn"][match.graded])   # -> ~4 px/s on this match: the camera
+                                                        #    is still most of the time
     """
     length, width = match.pitch
     aim = camera_point(match)

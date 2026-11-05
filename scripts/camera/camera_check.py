@@ -75,6 +75,10 @@ def auc(values, positive):
 def gap_mask(n_frames, gaps):
     """Bool mask of the frames of the gap dicts (with "start" and "stop", stop excluded).
 
+    n_frames is the mask's length, gaps a list of gap dicts as from
+    mtah.dead_ball.explain.explain_gaps() (only "start" and "stop" are read). Used to pick the
+    frames of the explained, or the unexplained, ball gaps for part 2.
+
         gap_mask(6, [{"start": 1, "stop": 3}])     # -> [F, T, T, F, F, F]
     """
     mask = np.zeros(n_frames, dtype=bool)

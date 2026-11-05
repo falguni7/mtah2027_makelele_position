@@ -94,6 +94,11 @@ def run_step(label, script, args=()):
 def skip_or_run(label, done_path, reuse, script):
     """Run a data-preparation step, unless reuse is set and its output done_path exists.
 
+    label is the step's header, done_path a file the step writes last (the cache's meta.json,
+    the WAV file), reuse the --reuse-cache flag, script the step's script relative to the
+    repository root, run with run_step(). Without reuse the step always runs, so the output
+    comes from the raw data; with it, an existing output is trusted as it is.
+
         skip_or_run("2/3 extract audio", AUDIO_PATH, reuse=True, script=...)
         # == 2/3 extract audio: skipped, cache/BAR-ATH_tactical_audio/audio_24k.wav exists
         skip_or_run("2/3 extract audio", AUDIO_PATH, reuse=False, script=...)

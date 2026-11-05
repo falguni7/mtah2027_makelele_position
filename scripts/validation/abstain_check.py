@@ -45,6 +45,10 @@ BINS = (0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.95, 0.99, 1.0001)
 def own_posterior(labels, post):
     """Per frame, the posterior of the frame's own label (NaN for labels other than H / A / D).
 
+    labels is a method's output per frame, post the (n, 3) posteriors in H, A, D order (as from
+    mtah.temporal.hmm.decode_posteriors). The result is how sure the model is of the label it
+    gave: the value binned in part 1 and compared with the abstention thresholds.
+
         labels = ["H", "D", "X"], post = [[0.7, 0.2, 0.1], [0.1, 0.1, 0.8], [0.3, 0.3, 0.4]]
         own_posterior(labels, post)        # -> [0.7, 0.8, nan]
     """
