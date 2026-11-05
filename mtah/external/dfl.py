@@ -12,7 +12,7 @@ per match, three XML files in external/dfl/:
   events_raw         the official event data: passes, tackles, throw-ins, fouls, ... with times
   positions_raw_observed   TRACAB tracking at 25 Hz: every player, the referees and the ball,
                      each as a <FrameSet> per person and half, one <Frame> per frame with
-                     N (frame number), X, Y (metres from the centre spot), S (speed, m/s), and
+                     N (frame number), X, Y (metres from the centre spot), S (speed, km/h), and
                      for the ball also Z (height), BallPossession (1 home, 2 guest) and
                      BallStatus (1 alive, 0 dead)
 
@@ -25,11 +25,14 @@ N, which jump at half-time, are kept in `frame_n`) and positions in OUR conventi
 the pitch corner, x along the length 0..105, y across 0..68. Players are slots: home players
 first, then guest players, in the order they appear in the file; a slot is NaN on frames where
 that player is not on the pitch (before coming on, after going off). Referees are left out.
+Speeds are converted from DFL's km/h to m/s, our unit (players_speed in our cache is m/s).
 
 Parsing a 400 MB XML file takes about a minute; the result is kept in
-cache/external/dfl/<match>.npz and read from there afterwards.
+cache/external/dfl/<match>.npz and read from there afterwards (parsed again when the cache was
+written by an older CACHE_VERSION of this code).
 """
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -44,6 +47,8 @@ DFL_DIR = os.path.join(ROOT, "external", "dfl")
 CACHE = os.path.join(CACHE_DIR, "external", "dfl")
 FPS = 25
 PITCH = (105.0, 68.0)
+KMH = 3.6                   # DFL speeds are km/h; divided by this they are m/s
+CACHE_VERSION = 2           # 2: speeds in m/s (1 kept DFL's km/h)
 MATCHES = ("DFL-MAT-J03WMX", "DFL-MAT-J03WN1", "DFL-MAT-J03WOH", "DFL-MAT-J03WOY",
            "DFL-MAT-J03WPY", "DFL-MAT-J03WQQ", "DFL-MAT-J03WR9")
 
@@ -129,7 +134,8 @@ def parse(match_id):
     Every <FrameSet> (one person, one half) is read line by line. The ball's frames fix the
     rows: every frame number at which the ball has a position, per half, in order. Players are
     placed on those rows by frame number. DFL's x, y are metres from the centre spot; they are
-    shifted by half the pitch so that x runs 0..105 and y 0..68 from a corner, as in our cache.
+    shifted by half the pitch so that x runs 0..105 and y 0..68 from a corner, as in our cache,
+    and speeds divided by KMH (km/h -> m/s).
 
         m = parse("DFL-MAT-J03WMX")
         m.players_xy.shape               # -> (n_frames, number of players used, 2)
@@ -175,7 +181,7 @@ def parse(match_id):
         frames = np.array([int(r[0]) for r in data])
         keep = np.array([f in index for f in frames])
         at = np.array([index[f] for f in frames[keep]], dtype=int) + offsets[k]
-        values = np.array([[float(r[1]), float(r[2]), float(r[4])] for r in data])[keep]
+        values = np.array([[float(r[1]), float(r[2]), float(r[4]) / KMH] for r in data])[keep]
         xy[at, slot_of[person], 0] = values[:, 0] + PITCH[0] / 2
         xy[at, slot_of[person], 1] = values[:, 1] + PITCH[1] / 2
         speed[at, slot_of[person]] = values[:, 2]
@@ -186,24 +192,79 @@ def parse(match_id):
         half=np.concatenate([np.full(len(n), h) for h, n, _ in ball]).astype(np.int8),
         ball_xyz=np.column_stack([b[:, 0] + PITCH[0] / 2, b[:, 1] + PITCH[1] / 2,
                                   b[:, 2]]).astype(np.float32),
-        ball_speed=b[:, 3].astype(np.float32),
+        ball_speed=(b[:, 3] / KMH).astype(np.float32),
         possession=b[:, 4].astype(np.int8), alive=b[:, 5] == 1,
         players_xy=xy, players_speed=speed,
         slot_team=np.array([0 if any(k[1] == home and k[2] == p for k in persons) else 1
                             for p in slot_ids], dtype=np.int8))
 
 
+def slot_persons(match_id, home, guest):
+    """Person id of every player slot, in the slot order parse() uses (home players first).
+
+    parse() gives each player a slot: first every home player, then every guest player, each in
+    the order their first <FrameSet> appears in the positions file. The DFLMatch does not keep
+    the person ids, so this re-reads only the <FrameSet> header lines (a fast pass over the
+    file; the result is kept in cache/external/dfl/<match>_slots.json) and rebuilds the same
+    order. Used to find the goalkeepers' slots.
+
+        slot_persons("DFL-MAT-J03WMX", m.home, m.guest)[:2]
+        # -> ["DFL-OBJ-...", "DFL-OBJ-..."]   slots 0 and 1, both home players
+    """
+    path = os.path.join(CACHE, match_id + "_slots.json")
+    if os.path.exists(path):
+        with open(path) as handle:
+            return json.load(handle)
+    order = []
+    with open(paths(match_id)[2], encoding="utf-8") as handle:
+        for line in handle:
+            if "<FrameSet" in line:
+                m = FRAMESET.search(line)
+                if (m.group(2), m.group(3)) not in order:
+                    order.append((m.group(2), m.group(3)))
+    out = [person for team in (home, guest) for t, person in order if t == team]
+    os.makedirs(CACHE, exist_ok=True)
+    with open(path, "w") as handle:
+        json.dump(out, handle)
+    return out
+
+
+def goalkeeper_slots(match):
+    """(home goalkeeper slot, guest goalkeeper slot) of a DFLMatch: the starting goalkeepers.
+
+    The match information lists each starting player's PlayingPosition; "TW" (Torwart) is the
+    goalkeeper. Substitutes have no position there, so a goalkeeper who comes on later is
+    treated as an outfield player (none of the 7 matches changes goalkeeper). The slots are
+    those of slot_persons(). Our feature code leaves goalkeepers out of a team's shape, as for
+    BAR-ATH (match.goalkeeper_slots there).
+
+        goalkeeper_slots(dfl.load("DFL-MAT-J03WMX"))      # -> (3, 16)
+    """
+    text = open(paths(match.match_id)[0], encoding="utf-8").read()
+    keepers = set(re.findall(r'<Player PersonId="([^"]+)"[^>]*PlayingPosition="TW"', text))
+    persons = slot_persons(match.match_id, match.home, match.guest)
+    slots = [s for s, p in enumerate(persons) if p in keepers]
+    team = np.asarray(match.slot_team)
+    return (next(s for s in slots if team[s] == 0), next(s for s in slots if team[s] == 1))
+
+
 def load(match_id):
     """The DFLMatch of one match: from cache/external/dfl/<match>.npz, parsed first if needed.
+
+    The cache is parsed again when it is missing or was written with another CACHE_VERSION
+    (e.g. version 1, which kept speeds in km/h).
 
         m = load("DFL-MAT-J03WMX")       # ~1 min the first time, ~1 s afterwards
         m.labels                         # H / A / D per frame
     """
     path = os.path.join(CACHE, match_id + ".npz")
     fields = [f for f in DFLMatch.__dataclass_fields__]
-    if not os.path.exists(path):
+    if os.path.exists(path):
+        with np.load(path) as data:
+            current = "version" in data and int(data["version"]) == CACHE_VERSION
+    if not os.path.exists(path) or not current:
         m = parse(match_id)
         os.makedirs(CACHE, exist_ok=True)
-        np.savez(path, **{f: getattr(m, f) for f in fields})
+        np.savez(path, version=CACHE_VERSION, **{f: getattr(m, f) for f in fields})
     data = np.load(path)
     return DFLMatch(**{f: (str(data[f]) if data[f].ndim == 0 else data[f]) for f in fields})
