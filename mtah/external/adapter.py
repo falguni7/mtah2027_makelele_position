@@ -26,10 +26,19 @@ degraded towards BAR-ATH (degrade_players):
 There is no camera on DFL: the homography is invalid on every frame, so the camera features are
 NaN (camera_advance_h, camera_y) or 0 (near_camera) and are left out of models trained on DFL.
 The ball is kept as it is here (ball_xy, ball_present all True); a model of the players alone
-ignores it, and the benchmark hides it in gaps separately.
+ignores it. The whole-pipeline benchmark (mtah/external/benchmark.py) hides it in gaps like
+ours with hide_ball() and with_ball_gaps():
 
-In this file: presence_gaps() (our player gap lengths), degrade_players() (hide and jitter) and
-as_match() (the Match-like object), with DFLAsMatch the object itself.
+  * the gap lengths are drawn from our match's own ball gaps (ball_gaps(): only the lengths and
+    the share of graded frames without a ball leave our match), and gaps are added at random
+    places until the same share of the DFL match has no ball;
+  * a gap's start can be made more likely on dead frames (dead_bias), as our ball is often lost
+    in stoppages (thrown back, the camera turning away), or left uniform (dead_bias 1).
+
+In this file: presence_gaps() (our player gap lengths), degrade_players() (hide and jitter),
+ball_gaps() (our ball gap lengths and share), hide_ball() (where to hide a DFL ball),
+as_match() (the Match-like object), with DFLAsMatch the object itself, and with_ball_gaps()
+(the ball of a DFLAsMatch hidden).
 """
 
 import numpy as np
@@ -64,6 +73,59 @@ def presence_gaps(match):
         out += [b - a for a, b in runs_of(~present[:, s]) if a > 0 and b < len(present)]
     out = np.array(out, dtype=np.int64)
     return out[out <= MAX_GAP]
+
+
+def ball_gaps(match):
+    """(lengths in frames of our ball gaps, share of graded frames without a ball).
+
+    The gaps are the runs of graded frames of our Match without a tracked ball, every length
+    (a gap never crosses half-time, as only graded frames count). Only these lengths and the
+    share leave the function: they are what hide_ball() copies onto a DFL match.
+
+        graded all True, ball_present = T F F T T F T T T T
+        ball_gaps(match)              # -> (array([2, 1]), 0.3)
+    """
+    missing = np.asarray(match.graded) & ~np.asarray(match.ball_present)
+    lengths = np.array([b - a for a, b in runs_of(missing)], dtype=np.int64)
+    return lengths, float(missing.sum() / np.asarray(match.graded).sum())
+
+
+def hide_ball(n, lengths, share, rng, dead=None, dead_bias=1.0, half=None):
+    """Bool mask of n frames where the ball is hidden: gaps of our lengths until `share` is hidden.
+
+    Gaps are added one at a time, each with a length drawn from `lengths` (frames, from
+    ball_gaps()) and a start frame drawn at random, until at least `share` of the n frames is
+    hidden; gaps that overlap merge. With dead (a bool mask of dead-ball frames) and dead_bias
+    above 1, a start on a dead frame is dead_bias times as likely as on an alive one. With half
+    (1 / 2 per frame) a gap is cut at the end of its half, as ours never cross half-time.
+    rng is a numpy Generator, so a seed gives the same mask every time.
+
+        n = 1000, lengths = [10], share 0.2, uniform starts
+        mask = hide_ball(1000, np.array([10]), 0.2, np.random.default_rng(0))
+        mask.mean()                   # -> 0.202: stops at the first gap that reaches at
+                                      #    least 200 frames, so a little over the share
+        # dead = frames 0-99, dead_bias 4: the first 100 frames hold 4 / (4 + 9) of the starts
+    """
+    weight = np.ones(n)
+    if dead is not None:
+        weight[np.asarray(dead, dtype=bool)] = dead_bias
+    cumulative = np.cumsum(weight)
+    half = np.ones(n, dtype=np.int64) if half is None else np.asarray(half)
+    stops = np.r_[np.flatnonzero(np.diff(half) != 0) + 1, n]      # first frame after each half
+    half_end = stops[np.searchsorted(stops, np.arange(n), side="right")]
+    mask = np.zeros(n, dtype=bool)
+    target = int(np.ceil(share * n))
+    hidden = 0
+    while hidden < target:
+        draws = rng.random(256) * cumulative[-1]
+        starts = np.searchsorted(cumulative, draws, side="right")
+        for start, length in zip(starts, rng.choice(lengths, 256)):
+            stop = min(start + int(length), half_end[start])
+            hidden += int((~mask[start:stop]).sum())
+            mask[start:stop] = True
+            if hidden >= target:
+                break
+    return mask
 
 
 def degrade_players(xy, rng, gaps, visible=VISIBLE, noise=NOISE):
@@ -145,3 +207,18 @@ def as_match(m, rng=None, gaps=None):
     out.homography = np.full((m.n_frames, 3, 3), np.nan)
     out.homography_valid = np.zeros(m.n_frames, dtype=bool)
     return out
+
+
+def with_ball_gaps(match, hidden):
+    """The DFLAsMatch `match` with its ball hidden on the frames of the bool mask `hidden`.
+
+    ball_present becomes False and ball_xy NaN there, as in our cache where the ball is not
+    tracked. The match is changed in place and returned.
+
+        match = with_ball_gaps(as_match(m), hide_ball(m.n_frames, lengths, 0.41, rng))
+        match.ball_present.mean()     # -> about 0.59
+    """
+    hidden = np.asarray(hidden, dtype=bool)
+    match.ball_present = ~hidden
+    match.ball_xy = np.where(hidden[:, None], np.nan, match.ball_xy)
+    return match

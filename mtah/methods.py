@@ -168,7 +168,7 @@ def shape_evidence(match, events, columns=None, camera=None):
 
 
 def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_model="boosting",
-           name=None):
+           weights=None, name=None):
     """Step 4: hmm_v1 plus team evidence from the shape model away from control events.
 
     Factory: returns the method named "hmm_v<version>" ("hmm_v2" by default). Same Viterbi decoding as hmm_v1, but in long
@@ -204,7 +204,10 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
     dfl_model picks the DFL-trained model: "boosting" (mtah.external.shape_transfer, hmm_v9) or
     "sequence" (the TCN + LSTM average fine-tuned on our confident frames, out of fold:
     mtah.external.shape_sequence, hmm_v10, built with hmm_v10()); dfl_team="replace" uses its
-    P(home | alive) INSTEAD of our shape model's, where it has one. name replaces the default
+    P(home | alive) INSTEAD of our shape model's, where it has one. weights, a dict of HMM
+    weights (names in mtah.temporal.hmm.WEIGHT_NAMES), replaces those weights for this method's
+    evidence and decoding (mtah.temporal.hmm.weights), e.g. the ones chosen on the DFL benchmark
+    (DFL_WEIGHTS); the others keep their module values. name replaces the default
     name. Methods with a DFL option have method.needs_dfl = True: they
     need the DFL open data in external/dfl/ (scripts/data/download_external.sh --dfl-only),
     which scripts/run_pipeline.py fetches when it is missing.
@@ -237,7 +240,7 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
     if soften_dfl == "detector" and dfl_dead != "B":
         raise ValueError("soften_dfl='detector' needs dfl_dead='B' (A mixes the two in one model)")
 
-    def evidence(match):
+    def _evidence(match):
         """Everything the decoder needs for one match, as a tuple for decode().
 
         (events, p_dead, dead_labels, p_home, shape_frames, switch): the step-2 control events,
@@ -291,6 +294,16 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
         switch = whistle_switch_costs(match.n_frames, whistles) if use_whistles else None
         return events, p_dead, dead_labels, p_home, frames, switch
 
+    def evidence(match):
+        """_evidence() with this method's HMM weights (the whistle switch costs use DEAD_SWITCH).
+
+            hmm_v2(version=7, weights={"DEAD_SWITCH": 8.0}).evidence(match)[5][0].max()
+            # -> 8.0: entering D costs 8 away from whistles
+        """
+        from mtah.temporal.hmm import weights as hmm_weights
+        with hmm_weights(weights):
+            return _evidence(match)
+
     def method(match):
         """Labels for one match: hmm_v1's decoding plus shape-model evidence in the gaps.
 
@@ -300,13 +313,16 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
             hmm_v2()(match).shape              # -> (match.n_frames,)
         """
         from mtah.temporal.hmm import decode, decode_posteriors
-        args = evidence(match)
-        labels = decode(match, *args)
-        if use_abstain:
-            from mtah.temporal.abstain import abstain
-            labels = abstain(labels, decode_posteriors(match, *args), match.graded)
+        from mtah.temporal.hmm import weights as hmm_weights
+        with hmm_weights(weights):
+            args = _evidence(match)
+            labels = decode(match, *args)
+            if use_abstain:
+                from mtah.temporal.abstain import abstain
+                labels = abstain(labels, decode_posteriors(match, *args), match.graded)
         return labels
     method.evidence = evidence
+    method.weights = dict(weights or {})
     method.needs_dfl = use_dfl              # needs external/dfl/ (scripts/run_pipeline.py)
     method.__name__ = name or "hmm_v{}".format(version)
     return method
@@ -386,6 +402,20 @@ def hmm_v10(team="replace", dead="A"):
     return hmm_v2(version=7, dfl_team=team, dfl_dead=dead, dfl_model="sequence", name=name)
 
 
+# HMM weights chosen on the DFL whole-pipeline benchmark (scripts/external/dfl_benchmark.py
+# --wide, "dead" ball placement, best mean spellF1 over all 7 matches): "own_shape" for the
+# variants with our shape model's team evidence (core, deadA_boost), "sequence" for those with
+# the sequence model's (A_seq). Several are at the edge of that grid (DEAD_WEIGHT 0.0125,
+# TEAM_SWITCH 16). The benchmark has no whistles, camera or Smart Tagging, so whether they
+# suit our match is checked there without labels (scripts/validation/v9_check.py, masking).
+DFL_WEIGHTS = {
+    "own_shape": {"TEAM_WEIGHT": 0.2, "DEAD_WEIGHT": 0.0125, "TEAM_SWITCH": 16.0,
+                  "DEAD_SWITCH": 2.0},
+    "sequence": {"TEAM_WEIGHT": 0.8, "DEAD_WEIGHT": 0.05, "TEAM_SWITCH": 16.0,
+                 "DEAD_SWITCH": 4.0},
+}
+
+
 # The official baselines ship as git-tracked files evaluation/results/<name>.csv, and
 # scripts/data/check_cache.py compares the cache against them. Scripts never write over them.
 OFFICIAL_BASELINES = frozenset({"baseline_raw", "baseline_smooth25", "baseline_smooth50",
@@ -418,4 +448,10 @@ METHODS = {
     "hmm_v10_team": hmm_v10(dead=None),
     "hmm_v10_deadA": hmm_v10(team=False),
     "hmm_v10A": hmm_v10(),
+    # the same methods with the DFL-chosen HMM weights
+    "hmm_v7_dflw": hmm_v2(version=7, weights=DFL_WEIGHTS["own_shape"], name="hmm_v7_dflw"),
+    "hmm_v9_deadA_dflw": hmm_v2(version=7, dfl_dead="A", weights=DFL_WEIGHTS["own_shape"],
+                                name="hmm_v9_deadA_dflw"),
+    "hmm_v10A_dflw": hmm_v2(version=7, dfl_team="replace", dfl_dead="A", dfl_model="sequence",
+                            weights=DFL_WEIGHTS["sequence"], name="hmm_v10A_dflw"),
 }

@@ -63,6 +63,9 @@ are (used for abstaining with X, mtah/temporal/abstain.py). With the step-4 shap
     labels = decode(match, events, p_dead, dead_labels, p_home, shape_frames, switch)
 """
 
+import contextlib
+import sys
+
 import numpy as np
 
 from mtah.dead_ball.detector import ALIVE, DEAD
@@ -82,6 +85,39 @@ DEAD_SWITCH = 4.0
 WHISTLE_SWITCH = 1.0       # cost of entering or leaving D near a whistle
 WHISTLE_ENTER = (-1.0, 1.0)    # seconds around a whistle where entering D is cheaper
 WHISTLE_LEAVE = (0.0, 3.0)     # seconds around a whistle where leaving D is cheaper
+
+
+WEIGHT_NAMES = ("TEAM_WEIGHT", "DEAD_WEIGHT", "TEAM_SWITCH", "DEAD_SWITCH")
+
+
+@contextlib.contextmanager
+def weights(values):
+    """Use other HMM weights inside the `with` block only; values is a dict, names in WEIGHT_NAMES.
+
+    The weights are this module's constants, read whenever emissions(), transition_matrix()
+    and whistle_switch_costs() run, so everything inside the block (evidence and decoding)
+    sees the new values and everything after it the old ones, even after an error. An empty
+    dict (or None) changes nothing. Used by the DFL benchmark's weight grid and by methods with
+    weights chosen there (mtah.methods.hmm_v2(weights=...)).
+
+        with weights({"TEAM_WEIGHT": 0.2}):
+            TEAM_WEIGHT               # -> 0.2  (read as hmm.TEAM_WEIGHT)
+        TEAM_WEIGHT                   # -> 0.05 again
+        weights({"CARRY_COST": 1})    # -> ValueError: not an HMM weight
+    """
+    values = dict(values or {})
+    unknown = set(values) - set(WEIGHT_NAMES)
+    if unknown:
+        raise ValueError("not an HMM weight: {}".format(sorted(unknown)))
+    module = sys.modules[__name__]
+    old = {name: getattr(module, name) for name in values}
+    try:
+        for name, value in values.items():
+            setattr(module, name, value)
+        yield
+    finally:
+        for name, value in old.items():
+            setattr(module, name, value)
 
 
 def emissions(n, events, p_dead, dead_labels, graded, p_home=None, shape_frames=None):
