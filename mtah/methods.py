@@ -454,4 +454,9 @@ METHODS = {
                                 name="hmm_v9_deadA_dflw"),
     "hmm_v10A_dflw": hmm_v2(version=7, dfl_team="replace", dfl_dead="A", dfl_model="sequence",
                             weights=DFL_WEIGHTS["sequence"], name="hmm_v10A_dflw"),
+    # hmm_v10A with only the team weight raised, as DFL asks for the sequence model's evidence
+    "hmm_v10A_tw02": hmm_v2(version=7, dfl_team="replace", dfl_dead="A", dfl_model="sequence",
+                            weights={"TEAM_WEIGHT": 0.2}, name="hmm_v10A_tw02"),
+    "hmm_v10A_tw04": hmm_v2(version=7, dfl_team="replace", dfl_dead="A", dfl_model="sequence",
+                            weights={"TEAM_WEIGHT": 0.4}, name="hmm_v10A_tw04"),
 }
