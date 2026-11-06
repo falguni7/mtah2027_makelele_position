@@ -118,6 +118,26 @@ def paths(match_id):
     return tuple(pick)
 
 
+def available():
+    """True when all three files of all 7 matches are in external/dfl/, else False.
+
+    What a method using DFL needs before it can run: the match information, the events and
+    the positions of every match in MATCHES (paths() finds each by its prefix and match id).
+    It only checks that the files are there; scripts/data/download_external.sh checks their
+    sizes when it downloads them.
+
+        available()        # -> True after `bash scripts/data/download_external.sh --dfl-only`
+    """
+    for match_id in MATCHES:
+        try:
+            files = paths(match_id)
+        except (OSError, StopIteration):        # no folder, or a file missing
+            return False
+        if not all(os.path.isfile(p) for p in files):
+            return False
+    return True
+
+
 def teams(match_id):
     """(home team id, guest team id) from the match information file.
 

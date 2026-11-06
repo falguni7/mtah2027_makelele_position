@@ -26,7 +26,8 @@ The pieces:
   model      HistGradientBoosting, as elsewhere in the pipeline (a neural net is kept for later).
 
 In this file: COLUMNS, CLASSES, build() (one match's features and labels, cached), mirror(),
-fit() and predict().
+fit(), predict() and for_match() (the model trained on all 7 DFL matches applied to our match,
+cached), which is how hmm_v9 gets it.
 """
 
 import os
@@ -133,3 +134,34 @@ def predict(model, table):
     straight = model.predict_proba(table[COLUMNS].to_numpy())
     flipped = model.predict_proba(mirror(table[COLUMNS]).to_numpy())[:, [1, 0, 2]]
     return ((straight + flipped) / 2).astype(np.float32)
+
+
+def for_match(match):
+    """(n_frames, 3) float32 P(H), P(A), P(D) of our match from the model trained on all DFL.
+
+    The shape model is trained on all 7 DFL matches (build(), seed k for the k-th match, players
+    degraded with our match's drop-out lengths, adapter.presence_gaps) and predicts every graded
+    frame of `match` from the same team-shape features (mtah/features/team_shape.py); other
+    frames are NaN. Nothing of our match is used for training except those drop-out lengths.
+    The features use no ball, so a masked copy of the match (mtah/validation/masking) gives the
+    same answer. The result is kept in cache/external/dfl/bar_ath_shape_v<FEATURE_VERSION>.npy
+    (gitignored: it is derived from our match) and read from there when its length matches.
+    Needs the DFL data in external/dfl/ (scripts/data/download_external.sh) on the first run.
+
+        p = for_match(load())
+        p[graded][0]                   # -> e.g. [0.05, 0.03, 0.92]   a frame before kick-off
+    """
+    path = os.path.join(dfl.CACHE, "bar_ath_shape_v{}.npy".format(FEATURE_VERSION))
+    if os.path.exists(path):
+        p = np.load(path)
+        if len(p) == match.n_frames:
+            return p
+    gaps = adapter.presence_gaps(match)
+    built = [build(match_id, gaps, seed=k) for k, match_id in enumerate(dfl.MATCHES)]
+    model = fit([b[0] for b in built], [b[1] for b in built])
+    graded = np.asarray(match.graded)
+    p = np.full((match.n_frames, 3), np.nan, dtype=np.float32)
+    p[graded] = predict(model, team_shape.compute(match)[graded])
+    os.makedirs(dfl.CACHE, exist_ok=True)
+    np.save(path, p)
+    return p

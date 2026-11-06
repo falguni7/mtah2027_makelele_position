@@ -175,6 +175,10 @@ WHISTLE = ["since_whistle", "until_whistle"]
 # Optional: how fast the tactical camera turns, over 1 s and 3 s (mtah.features.camera). The
 # camera follows the ball, so it rests in a stoppage and turns in play, ball tracked or not.
 CAMERA = ["cam_turn", "cam_turn_3s"]
+# Optional: the DFL-trained shape model's opinion (mtah.external.shape_transfer.for_match): its
+# P(D), and how clearly it sees one team in possession, |P(H) - P(A)| / (P(H) + P(A)). Players
+# standing like a stoppage (walking, lining up) give a high P(D) whether the ball is tracked or not.
+DFL = ["dfl_dead", "dfl_team_margin"]
 
 
 def train(table, labels, columns=COLUMNS):
@@ -262,7 +266,7 @@ def decode(p_dead, labels, graded):
 
 
 def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=True,
-           whistles=None, camera=None):
+           whistles=None, camera=None, dfl=None):
     """(dead mask, raw P(dead), confident labels) for every video frame.
 
     The whole detector: confident_labels, train, predict, decode. match is the cached Match
@@ -271,8 +275,10 @@ def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=Tru
     confident-label rules, columns picks the classifier inputs. whistles, if given, are whistle
     events (mtah.audio.whistle.match_whistles()); their WHISTLE timing columns are then added to
     the table (a copy) and to the classifier inputs. camera, if given, is the camera table of
-    mtah.features.camera.compute(match); its CAMERA columns are added the same way. Neither
-    changes the confident labels, only what the classifier sees. Returns a bool array
+    mtah.features.camera.compute(match); its CAMERA columns are added the same way. dfl, if
+    given, is the (n_frames, 3) P(H), P(A), P(D) of the DFL-trained shape model
+    (mtah.external.shape_transfer.for_match); its DFL columns are added the same way (hmm_v9,
+    option A). None of them changes the confident labels, only what the classifier sees. Returns a bool array
     (dead = D), a float32 array of the classifier's P(dead) before decoding and the int8
     labels, all of length n_frames.
 
@@ -281,6 +287,7 @@ def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=Tru
         detect(match, table, use_set_pieces=False)   # without the set-piece rule
         detect(match, table, whistles=match_whistles())   # with the whistle features
         detect(match, table, camera=camera.compute(match))  # with the camera's turning speed
+        detect(match, table, dfl=shape_transfer.for_match(match))   # with the DFL model's P(D)
     """
     if whistles is not None:
         from mtah.audio.whistle import timing_features
@@ -289,6 +296,12 @@ def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=Tru
     if camera is not None:
         table = table.assign(**{c: camera[c].to_numpy() for c in CAMERA})
         columns = list(columns) + [c for c in CAMERA if c not in columns]
+    if dfl is not None:
+        dfl = np.asarray(dfl, dtype=np.float64)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            margin = np.abs(dfl[:, 0] - dfl[:, 1]) / (dfl[:, 0] + dfl[:, 1])
+        table = table.assign(dfl_dead=dfl[:, 2], dfl_team_margin=margin)
+        columns = list(columns) + [c for c in DFL if c not in columns]
     labels = confident_labels(match, table, use_set_pieces, running_alive)
     model = train(table, labels, columns)
     p_dead = predict(model, table, columns)

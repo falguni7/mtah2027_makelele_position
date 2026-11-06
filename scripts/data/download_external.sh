@@ -5,6 +5,8 @@
 # are public, but external/ is gitignored all the same: they are large and fetched by this script.
 #
 #   bash scripts/data/download_external.sh            # all three, ~6.2 G as reported by du -sh
+#   bash scripts/data/download_external.sh --dfl-only # only the DFL matches (what the methods
+#                                                     # using DFL need; scripts/run_pipeline.py)
 #
 #   external/dfl/          DFL Bundesliga open data, 7 matches, CC BY 4.0 (figshare 28196177)
 #                          Bassek et al., Scientific Data 12, 195 (2025)
@@ -22,12 +24,17 @@
 # line per DFL file fetched, then "done: <total size> in <external folder>".
 set -euo pipefail
 
+DFL_ONLY=0
+[ "${1:-}" = "--dfl-only" ] && DFL_ONLY=1
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$ROOT/external"
 mkdir -p "$OUT/dfl"
 
-[ -d "$OUT/metrica" ] || git clone --depth 1 https://github.com/metrica-sports/sample-data.git "$OUT/metrica"
-[ -d "$OUT/skillcorner" ] || git clone --depth 1 https://github.com/SkillCorner/opendata.git "$OUT/skillcorner"
+if [ "$DFL_ONLY" = 0 ]; then
+    [ -d "$OUT/metrica" ] || git clone --depth 1 https://github.com/metrica-sports/sample-data.git "$OUT/metrica"
+    [ -d "$OUT/skillcorner" ] || git clone --depth 1 https://github.com/SkillCorner/opendata.git "$OUT/skillcorner"
+fi
 
 # figshare API: one line per file, "<download_url> <name> <size>"; skip files already complete.
 # Complete means: present and exactly the listed size in bytes.
