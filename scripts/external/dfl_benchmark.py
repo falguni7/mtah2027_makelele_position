@@ -3,6 +3,8 @@
     sbatch --time=02:00:00 scripts/slurm/run.sbatch scripts/external/dfl_benchmark.py
     python scripts/external/dfl_benchmark.py --quick     # 1 match, 1 placement, 2 weight sets
     python scripts/external/dfl_benchmark.py --wide      # GRID_WIDE: past GRID's edges
+    python scripts/external/dfl_benchmark.py --today --variants deadA_boost A_seq mix
+                                    # today's weights only, some variants, nothing saved
 
 mtah/external/benchmark.py makes each DFL match look like ours (degraded players, the ball
 hidden in gaps like ours, "random" or "dead" placement, no sound, camera or Smart Tagging) and
@@ -77,15 +79,19 @@ def weight_sets(grid=GRID):
 def run_one(job):
     """Scores of every variant x weight set on one (match, placement): an array and D AUCs.
 
-    job is (match_id, placement, ctx, sets). Returns (match_id, placement, scores, d_auc) with
-    scores of shape (variants, weight sets, len(KEYS)) and d_auc a list over the variants.
+    job is (match_id, placement, ctx, sets, variants). Returns (match_id, placement, scores,
+    d_auc) with scores of shape (variants, weight sets, len(KEYS)) and d_auc a list over the
+    variants.
+
+        run_one(("DFL-MAT-J03WMX", "random", ctx, sets[:2], ["core", "mix"]))
+        # -> ("DFL-MAT-J03WMX", "random", array of shape (2, 2, 4), [AUC core, AUC mix])
     """
-    match_id, placement, ctx, sets = job
+    match_id, placement, ctx, sets, variants = job
     started = time.time()
     match, truth = bm.bench_match(match_id, ctx, placement)
-    out = np.zeros((len(bm.VARIANTS), len(sets), len(KEYS)))
+    out = np.zeros((len(variants), len(sets), len(KEYS)))
     d_auc = []
-    for v, variant in enumerate(bm.VARIANTS):
+    for v, variant in enumerate(variants):
         ev = bm.evidence(match, truth, variant)
         d_auc.append(ev["d_auc"])
         for s, values in enumerate(sets):
@@ -113,6 +119,10 @@ if __name__ == '__main__':
                         help="1 match, random placement, 2 weight sets")
     parser.add_argument("--wide", action="store_true", help="GRID_WIDE instead of GRID")
     parser.add_argument("--workers", type=int, default=14)
+    parser.add_argument("--today", action="store_true",
+                        help="today's weights only (no choosing); nothing is saved")
+    parser.add_argument("--variants", nargs="+", default=list(bm.VARIANTS),
+                        choices=list(bm.VARIANTS))
     args = parser.parse_args()
 
     ctx = bm.context()
@@ -123,17 +133,19 @@ if __name__ == '__main__':
     sets = weight_sets(GRID_WIDE if args.wide else GRID)
     if args.quick:
         matches, placements, sets = matches[:1], placements[:1], sets[:2]
-    jobs = [(m, p, ctx, sets) for p in placements for m in matches]
+    if args.today:
+        sets = sets[:1]
+    variants = args.variants
+    jobs = [(m, p, ctx, sets, variants) for p in placements for m in matches]
     with Pool(min(args.workers, len(jobs))) as pool:
         done = pool.map(run_one, jobs, chunksize=1)
 
-    variants = list(bm.VARIANTS)
     scores = np.zeros((len(placements), len(matches), len(variants), len(sets), len(KEYS)))
     d_auc = np.zeros((len(placements), len(matches), len(variants)))
     for match_id, placement, out, auc in done:
         p, m = placements.index(placement), matches.index(match_id)
         scores[p, m], d_auc[p, m] = out, auc
-    if not args.quick:
+    if not (args.quick or args.today or variants != list(bm.VARIANTS)):
         np.savez(OUT.format("_wide" if args.wide else ""), scores=scores, d_auc=d_auc, matches=matches, placements=placements,
                  variants=variants, keys=KEYS,
                  sets=np.array([[s[w] for w in bm.WEIGHTS] for s in sets]))

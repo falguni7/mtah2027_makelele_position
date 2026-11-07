@@ -91,3 +91,9 @@ __pycache__/
 venv/
 env/
 .DS_Store
+
+# -- local validation scripts ---------------------------------------------------------------------
+# Tools for looking at our outputs next to the video and each other (not part of the pipeline).
+scripts/validation/video_alignment.py
+scripts/validation/compare_spells.py
+scripts/validation/diff_segments.py

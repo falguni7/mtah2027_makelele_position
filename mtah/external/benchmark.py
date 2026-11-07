@@ -41,6 +41,9 @@ match out of fold on control-event pseudo-labels, Viterbi):
   deadA_seq     the same from the sequence model (TCN + LSTM average; hmm_v10_deadA)
   team_seq      the sequence model's P(home | alive) instead of our shape model's (hmm_v10_team)
   A_seq         both (hmm_v10A)
+  mix           hmm_v11_mix: deadA_boost and A_seq with equal weight. The detector is trained
+                once with each model's P(D) and team margin and the two P(dead) are averaged
+                in log-odds; our shape model's P(home) and the sequence model's likewise
 
 The DFL model predictions are each match's leave-one-match-out ones, cached by
 scripts/external/dfl_shape.py and dfl_sequence.py: on every DFL match they come from models that
@@ -64,6 +67,7 @@ from mtah.external import shape_transfer as st
 from mtah.possession import shape_model
 from mtah.possession.control import control_events
 from mtah.temporal import hmm
+from mtah.temporal.fusion import average_logodds
 from mtah.utils import runs_of
 
 # Params
@@ -76,6 +80,7 @@ VARIANTS = {
     "deadA_seq": dict(dead="sequence", team=None),
     "team_seq": dict(dead=None, team="sequence"),
     "A_seq": dict(dead="sequence", team="sequence"),
+    "mix": dict(dead="mix", team="mix"),
 }
 WEIGHTS = hmm.WEIGHT_NAMES
 DEFAULT = {w: getattr(hmm, w) for w in WEIGHTS}       # the weights every method uses today
@@ -178,16 +183,23 @@ def evidence(match, truth, variant, team_table=None):
     if team_table is None:
         team_table, _ = st.build(truth.match_id, None, seed=truth.k)
     table = features.compute(match)
-    dead_dfl = dfl_probs(truth.match_id, spec["dead"]) if spec["dead"] else None
-    _, p_dead, dead_labels = dead_ball.detect(match, table, dfl=dead_dfl)
+    models = {None: [None], "mix": ["boosting", "sequence"]}.get(spec["dead"], [spec["dead"]])
+    detected = [dead_ball.detect(match, table, dfl=dfl_probs(truth.match_id, m) if m else None)
+                for m in models]
+    _, p_dead, dead_labels = detected[0]
+    if len(detected) == 2:                  # "mix": the two detectors' P(dead) averaged
+        p_dead = average_logodds(p_dead, detected[1][1])
     events = control_events(match)
     target = shape_model.pseudo_labels(match, events)
     p_home, _ = shape_model.out_of_fold(team_table, target, match.graded, st.COLUMNS)
     if spec["team"]:
-        p = dfl_probs(truth.match_id, spec["team"])
+        p = dfl_probs(truth.match_id, "sequence" if spec["team"] == "mix" else spec["team"])
         with np.errstate(invalid="ignore", divide="ignore"):
             theirs = p[:, 0] / (p[:, 0] + p[:, 1])
-        p_home = np.where(np.isfinite(theirs), theirs, p_home).astype(np.float32)
+        if spec["team"] == "mix":
+            p_home = average_logodds(p_home, theirs)
+        else:
+            p_home = np.where(np.isfinite(theirs), theirs, p_home).astype(np.float32)
     from sklearn.metrics import roc_auc_score
     finite = np.isfinite(p_dead)
     return {"events": events, "p_dead": p_dead, "dead_labels": dead_labels, "p_home": p_home,

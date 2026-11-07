@@ -23,13 +23,13 @@ python scripts/run_pipeline.py
 ```
 
 It builds the numpy cache from the tracking, homography and Smart Tagging, extracts the
-tactical video's sound (for the referee-whistle detector), runs our method `hmm_v9_deadA` and checks
+tactical video's sound (for the referee-whistle detector), runs our method `hmm_v11_mix` and checks
 the result with the official validator. The file is `submissions/BAR-ATH_possession.csv`, and
 its SHA-256 is printed at the end. Nothing is random, so every run gives the same file. It takes
 3-4 minutes on a 16-core node. See `scripts/run_pipeline.py` for the steps.
 
-Methods that also learn from public labelled matches of other games (the `hmm_v9` family, which
-uses the DFL Bundesliga open data, CC BY 4.0, including the submitted `hmm_v9_deadA`) need
+Methods that also learn from public labelled matches of other games (`hmm_v9` and later, which
+use the DFL Bundesliga open data, CC BY 4.0, including the submitted `hmm_v11_mix`) need
 those matches in `external/dfl/`, about
 2.5 GB. The pipeline downloads them when such a method is the submitted one and they are
 missing; on a machine whose compute nodes have no internet access, fetch them first with

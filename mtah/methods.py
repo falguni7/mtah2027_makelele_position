@@ -25,6 +25,10 @@ The methods follow the roadmap steps:
     hmm_v9_*           hmm_v7 with the DFL-trained shape model (mtah.external.shape_transfer):
                        its team opinion averaged with ours, and / or its P(D) for dead ball,
                        fed into the detector (A) or averaged with it (B); see hmm_v9()
+    hmm_v10*           hmm_v7 with the sequence shape model (TCN + LSTM): its team opinion
+                       instead of ours, and / or its P(D) in the detector; see hmm_v10()
+    hmm_v11_mix        hmm_v9_deadA and hmm_v10A with equal weight: both detectors' P(dead) and
+                       both team opinions averaged in log-odds, decoded once; see hmm_v11()
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -204,7 +208,11 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
     dfl_model picks the DFL-trained model: "boosting" (mtah.external.shape_transfer, hmm_v9) or
     "sequence" (the TCN + LSTM average fine-tuned on our confident frames, out of fold:
     mtah.external.shape_sequence, hmm_v10, built with hmm_v10()); dfl_team="replace" uses its
-    P(home | alive) INSTEAD of our shape model's, where it has one. weights, a dict of HMM
+    P(home | alive) INSTEAD of our shape model's, where it has one. dfl_model="mix" is the
+    equal-weight ensemble of hmm_v9_deadA and hmm_v10A (hmm_v11_mix, built with hmm_v11()): with
+    dfl_dead="A" the dead-ball detector is trained twice, once with each model's P(D) and team
+    margin as inputs, and the two P(dead) are averaged in log-odds; dfl_team=True averages our
+    shape model's P(home) with the sequence model's. weights, a dict of HMM
     weights (names in mtah.temporal.hmm.WEIGHT_NAMES), replaces those weights for this method's
     evidence and decoding (mtah.temporal.hmm.weights), e.g. the ones chosen on the DFL benchmark
     (DFL_WEIGHTS); the others keep their module values. name replaces the default
@@ -234,9 +242,13 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
         raise ValueError("the DFL options build on version 7")
     if dfl_dead not in (None, "A", "B") or soften_dfl not in ("combined", "detector"):
         raise ValueError("dfl_dead must be None, 'A' or 'B'; soften_dfl 'combined' or 'detector'")
-    if dfl_team not in (False, True, "replace") or dfl_model not in ("boosting", "sequence"):
-        raise ValueError("dfl_team must be False, True or 'replace'; dfl_model 'boosting' or "
-                         "'sequence'")
+    if dfl_team not in (False, True, "replace") or dfl_model not in ("boosting", "sequence",
+                                                                     "mix"):
+        raise ValueError("dfl_team must be False, True or 'replace'; dfl_model 'boosting', "
+                         "'sequence' or 'mix'")
+    if dfl_model == "mix" and (dfl_dead == "B" or dfl_team == "replace"):
+        raise ValueError("dfl_model='mix' averages: it takes dfl_dead None or 'A' and dfl_team "
+                         "False or True")
     if soften_dfl == "detector" and dfl_dead != "B":
         raise ValueError("soften_dfl='detector' needs dfl_dead='B' (A mixes the two in one model)")
 
@@ -260,17 +272,22 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
         whistles = match_whistles() if use_whistles else None
         table = features.compute(match)
         cam = camera_features.compute(match) if use_camera else None
-        dfl = None
+        tables = []                         # the DFL models' (n_frames, 3) P(H), P(A), P(D)
         if use_dfl:
             from mtah.temporal.fusion import average_logodds, calibrate
-            if dfl_model == "sequence":
-                from mtah.external.shape_sequence import for_match
-            else:
-                from mtah.external.shape_transfer import for_match
-            dfl = for_match(match)
-        _, p_dead, dead_labels = dead_ball.detect(
-            match, table, whistles=whistles if whistle_features else None, camera=cam,
-            dfl=dfl if dfl_dead == "A" else None)
+            if dfl_model in ("boosting", "mix"):
+                from mtah.external import shape_transfer
+                tables.append(shape_transfer.for_match(match))
+            if dfl_model in ("sequence", "mix"):
+                from mtah.external import shape_sequence
+                tables.append(shape_sequence.for_match(match))
+        dfl = tables[-1] if tables else None     # the team model: the sequence one with "mix"
+        detected = [dead_ball.detect(match, table, camera=cam, dfl=t,
+                                     whistles=whistles if whistle_features else None)
+                    for t in (tables if dfl_dead == "A" else [None])]
+        _, p_dead, dead_labels = detected[0]  # the confident labels never depend on dfl
+        if len(detected) == 2:                  # "mix": one detector per model, averaged
+            p_dead = average_logodds(p_dead, detected[1][1])
         dfl_dead_p = calibrate(dfl[:, 2], dead_labels) if dfl_dead == "B" else None
         if soften_unexplained:
             from mtah.dead_ball import explain
@@ -402,6 +419,31 @@ def hmm_v10(team="replace", dead="A"):
     return hmm_v2(version=7, dfl_team=team, dfl_dead=dead, dfl_model="sequence", name=name)
 
 
+def hmm_v11():
+    """hmm_v11_mix: hmm_v9_deadA and hmm_v10A combined with equal weight, decoded once.
+
+    The two methods differ in two inputs, and each is averaged half and half in log-odds
+    (mtah.temporal.fusion.average_logodds) before one Viterbi decoding:
+
+      dead   P(dead) of the dead-ball detector trained with the DFL boosting model's P(D) and
+             team margin as inputs (hmm_v9_deadA's) and of the one trained with the sequence
+             model's (hmm_v10A's); then softened in unexplained gaps as in hmm_v7
+      team   far from control events, our shape model's P(home) (hmm_v9_deadA's) and the
+             sequence model's P(home | alive) (hmm_v10A's); where the sequence model has no
+             value, ours alone
+
+    Averaging the evidence, not the two label files, keeps one decoding, so the possessions are
+    as coherent as each method's own; a frame-by-frame vote of two methods ties on every frame
+    they disagree on. The half-and-half weight is fixed in advance, not chosen on our match.
+    Weights and switch costs are hmm_v7's. Needs PyTorch, as hmm_v10.
+
+        hmm_v11().__name__                 # -> "hmm_v11_mix"
+        # a frame where hmm_v9_deadA's team evidence is P(home) 0.9 and hmm_v10A's 0.1:
+        average_logodds([0.9], [0.1])      # -> [0.5], no opinion; 0.9 and 0.5 -> 0.75
+    """
+    return hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix", name="hmm_v11_mix")
+
+
 # HMM weights chosen on the DFL whole-pipeline benchmark (scripts/external/dfl_benchmark.py
 # --wide, "dead" ball placement, best mean spellF1 over all 7 matches): "own_shape" for the
 # variants with our shape model's team evidence (core, deadA_boost), "sequence" for those with
@@ -448,6 +490,7 @@ METHODS = {
     "hmm_v10_team": hmm_v10(dead=None),
     "hmm_v10_deadA": hmm_v10(team=False),
     "hmm_v10A": hmm_v10(),
+    "hmm_v11_mix": hmm_v11(),
     # the same methods with the DFL-chosen HMM weights
     "hmm_v7_dflw": hmm_v2(version=7, weights=DFL_WEIGHTS["own_shape"], name="hmm_v7_dflw"),
     "hmm_v9_deadA_dflw": hmm_v2(version=7, dfl_dead="A", weights=DFL_WEIGHTS["own_shape"],
