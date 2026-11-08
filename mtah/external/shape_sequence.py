@@ -542,7 +542,7 @@ def predict(fitted, table, half):
 
 
 
-def for_match(match):
+def for_match(match, path=None, gaps=None, extra=()):
     """(n_frames, 3) float32 P(H), P(A), P(D) of our match: the fine-tuned TCN + LSTM average.
 
     The recipe measured in scripts/external/bar_ath_finetune.py, for hmm_v10:
@@ -572,7 +572,18 @@ def for_match(match):
     blocks would lose the labels of their hidden stretches (control events need the ball), so
     the fine-tuning there would see a little less.
 
+    Another match (a Metrica benchmark match, mtah/external/metrica_bench.py) passes its own
+    cache `path`, so our match's cache is never overwritten, and `gaps`, the drop-out lengths
+    the DFL players were degraded with (ours; default: adapter.presence_gaps(match)). Its own
+    confident frames are then the ones fine-tuned on, exactly as ours are here.
+
+    extra adds labelled matches, as (name, table, labels, half) entries (mtah/external/pool.py:
+    the Metrica matches; hmm_v12): they join the 5 DFL training matches of step 1 (the 6th DFL
+    match stays the only validation match) and the DFL batches of the fine-tuning in step 3. A
+    caller passing extra must also pass its own path.
+
         p = for_match(load())
+        for_match(metrica_match, path=".../metrica_game1_random_sequence.npy", gaps=our_gaps)
         p[graded][0]                   # -> e.g. [0.04, 0.03, 0.93]   a frame before kick-off
     """
     from mtah import features
@@ -581,7 +592,8 @@ def for_match(match):
     from mtah.possession.control import control_events
     from mtah.features import team_shape
 
-    path = os.path.join(dfl.CACHE, "bar_ath_sequence_v{}.npy".format(VERSION))
+    if path is None:
+        path = os.path.join(dfl.CACHE, "bar_ath_sequence_v{}.npy".format(VERSION))
     if os.path.exists(path):
         p = np.load(path)
         if len(p) == match.n_frames:
@@ -594,10 +606,12 @@ def for_match(match):
     block = shape_model.blocks(graded)
     whole = segments(graded)
 
-    gaps = adapter.presence_gaps(match)
+    if gaps is None:
+        gaps = adapter.presence_gaps(match)
     data = {m: st.build(m, gaps, seed=k) + (dfl.load(m).half,) for k, m in enumerate(dfl.MATCHES)}
-    train = [data[m] for m in dfl.MATCHES[:5]]
-    tune = tuple(list(x) for x in zip(*[data[m] for m in dfl.MATCHES[:6]]))
+    more = [(e[1], e[2], e[3]) for e in extra]
+    train = [data[m] for m in dfl.MATCHES[:5]] + more
+    tune = tuple(list(x) for x in zip(*([data[m] for m in dfl.MATCHES[:6]] + more)))
     kinds = []
     for kind in KINDS:
         runs = []
@@ -612,6 +626,6 @@ def for_match(match):
             runs.append(oof)
         kinds.append(np.mean(runs, axis=0))
     p = np.mean(kinds, axis=0).astype(np.float32)
-    os.makedirs(dfl.CACHE, exist_ok=True)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     np.save(path, p)
     return p

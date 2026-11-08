@@ -44,6 +44,8 @@ match out of fold on control-event pseudo-labels, Viterbi):
   mix           hmm_v11_mix: deadA_boost and A_seq with equal weight. The detector is trained
                 once with each model's P(D) and team margin and the two P(dead) are averaged
                 in log-odds; our shape model's P(home) and the sequence model's likewise
+  *_pool        deadA_boost, A_seq and mix with the DFL models trained on the pool of the other
+                6 DFL matches plus the 3 Metrica matches (mtah/external/pool.py; hmm_v12)
 
 The DFL model predictions are each match's leave-one-match-out ones, cached by
 scripts/external/dfl_shape.py and dfl_sequence.py: on every DFL match they come from models that
@@ -81,6 +83,10 @@ VARIANTS = {
     "team_seq": dict(dead=None, team="sequence"),
     "A_seq": dict(dead="sequence", team="sequence"),
     "mix": dict(dead="mix", team="mix"),
+    # the same with the DFL models trained on the pool of 7 DFL + 3 Metrica matches (hmm_v12)
+    "deadA_boost_pool": dict(dead="boosting", team=None, pool=True),
+    "A_seq_pool": dict(dead="sequence", team="sequence", pool=True),
+    "mix_pool": dict(dead="mix", team="mix", pool=True),
 }
 WEIGHTS = hmm.WEIGHT_NAMES
 DEFAULT = {w: getattr(hmm, w) for w in WEIGHTS}       # the weights every method uses today
@@ -150,16 +156,18 @@ def bench_match(match_id, ctx, placement):
                         match_id=match_id)
 
 
-def dfl_probs(match_id, model):
+def dfl_probs(match_id, model, pool=False):
     """(n, 3) leave-one-match-out P(H), P(A), P(D) of a DFL model on one DFL match.
 
     model "boosting" reads <match>_shape_oof.npy (scripts/external/dfl_shape.py), "sequence"
     the average of <match>_tcn_oof.npy and <match>_lstm_oof.npy (dfl_sequence.py), as the
-    TCN + LSTM average used on our match.
+    TCN + LSTM average used on our match. pool=True reads the models trained with the 3 Metrica
+    matches added (<match>_shape_pool_oof.npy ..., scripts/external/pool_oof.py).
 
         dfl_probs("DFL-MAT-J03WMX", "sequence").sum(axis=1)[:2]   # -> [1., 1.]
+        dfl_probs("DFL-MAT-J03WMX", "boosting", pool=True)       # trained on 6 DFL + 3 Metrica
     """
-    path = os.path.join(dfl.CACHE, match_id + "_{}_oof.npy")
+    path = os.path.join(dfl.CACHE, match_id + "_{}" + ("_pool" if pool else "") + "_oof.npy")
     if model == "boosting":
         return np.load(path.format("shape"))
     if model == "sequence":
@@ -167,7 +175,7 @@ def dfl_probs(match_id, model):
     raise ValueError("model must be 'boosting' or 'sequence'")
 
 
-def evidence(match, truth, variant, team_table=None):
+def evidence(match, truth, variant, team_table=None, probs=None):
     """The HMM's inputs for one benchmark match and variant, as a dict.
 
     Keys events, p_dead, dead_labels, p_home, frames: the arguments of hmm.decode after match,
@@ -175,6 +183,9 @@ def evidence(match, truth, variant, team_table=None):
     softening), with the VARIANTS changes. Our shape model reads the ball-free DFL shape table
     (shape_transfer.COLUMNS, cached by shape_transfer.build; pass team_table to reuse one).
     Also "d_auc": how well the detector's P(dead) ranks the true D frames, for the report.
+    probs, a dict {"boosting": (n, 3), "sequence": (n, 3)}, replaces the cached DFL predictions
+    (dfl_probs) for a match that is not a DFL match (mtah/external/metrica_bench.py, which also
+    passes its own team_table); for a *_pool variant the caller passes the pool models' ones.
 
         ev = evidence(match, truth, "deadA_seq")
         len(ev["events"]), ev["p_dead"].shape      # -> e.g. (2400, (145967,))
@@ -183,9 +194,13 @@ def evidence(match, truth, variant, team_table=None):
     if team_table is None:
         team_table, _ = st.build(truth.match_id, None, seed=truth.k)
     table = features.compute(match)
+    if probs is None:
+        def get(model):
+            return dfl_probs(truth.match_id, model, pool=spec.get("pool", False))
+    else:
+        get = probs.__getitem__
     models = {None: [None], "mix": ["boosting", "sequence"]}.get(spec["dead"], [spec["dead"]])
-    detected = [dead_ball.detect(match, table, dfl=dfl_probs(truth.match_id, m) if m else None)
-                for m in models]
+    detected = [dead_ball.detect(match, table, dfl=get(m) if m else None) for m in models]
     _, p_dead, dead_labels = detected[0]
     if len(detected) == 2:                  # "mix": the two detectors' P(dead) averaged
         p_dead = average_logodds(p_dead, detected[1][1])
@@ -193,7 +208,7 @@ def evidence(match, truth, variant, team_table=None):
     target = shape_model.pseudo_labels(match, events)
     p_home, _ = shape_model.out_of_fold(team_table, target, match.graded, st.COLUMNS)
     if spec["team"]:
-        p = dfl_probs(truth.match_id, "sequence" if spec["team"] == "mix" else spec["team"])
+        p = get("sequence" if spec["team"] == "mix" else spec["team"])
         with np.errstate(invalid="ignore", divide="ignore"):
             theirs = p[:, 0] / (p[:, 0] + p[:, 1])
         if spec["team"] == "mix":
@@ -201,7 +216,7 @@ def evidence(match, truth, variant, team_table=None):
         else:
             p_home = np.where(np.isfinite(theirs), theirs, p_home).astype(np.float32)
     from sklearn.metrics import roc_auc_score
-    finite = np.isfinite(p_dead)
+    finite = np.isfinite(p_dead) & np.isin(truth.labels, ["H", "A", "D"])
     return {"events": events, "p_dead": p_dead, "dead_labels": dead_labels, "p_home": p_home,
             "frames": shape_model.gap_frames(match, events),
             "d_auc": float(roc_auc_score((truth.labels == "D")[finite], p_dead[finite]))}

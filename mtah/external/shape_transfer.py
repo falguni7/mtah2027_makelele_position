@@ -136,7 +136,7 @@ def predict(model, table):
     return ((straight + flipped) / 2).astype(np.float32)
 
 
-def for_match(match):
+def for_match(match, path=None, gaps=None, extra=()):
     """(n_frames, 3) float32 P(H), P(A), P(D) of our match from the model trained on all DFL.
 
     The shape model is trained on all 7 DFL matches (build(), seed k for the k-th match, players
@@ -148,20 +148,32 @@ def for_match(match):
     (gitignored: it is derived from our match) and read from there when its length matches.
     Needs the DFL data in external/dfl/ (scripts/data/download_external.sh) on the first run.
 
+    Another match (a Metrica benchmark match, mtah/external/metrica_bench.py) passes its own
+    cache `path`, so our match's cache is never overwritten, and `gaps`, the drop-out lengths
+    the DFL players were degraded with (ours; default: adapter.presence_gaps(match)).
+
+    extra adds labelled matches to the 7 DFL ones, as (name, table, labels, half) entries
+    (mtah/external/pool.py: the Metrica matches; hmm_v12). A caller passing extra must also pass
+    its own path, so the DFL-only cache is never mixed up with it.
+
         p = for_match(load())
         p[graded][0]                   # -> e.g. [0.05, 0.03, 0.92]   a frame before kick-off
+        for_match(metrica_match, path=".../metrica_game1_shape.npy", gaps=our_gaps)
     """
-    path = os.path.join(dfl.CACHE, "bar_ath_shape_v{}.npy".format(FEATURE_VERSION))
+    if path is None:
+        path = os.path.join(dfl.CACHE, "bar_ath_shape_v{}.npy".format(FEATURE_VERSION))
     if os.path.exists(path):
         p = np.load(path)
         if len(p) == match.n_frames:
             return p
-    gaps = adapter.presence_gaps(match)
+    if gaps is None:
+        gaps = adapter.presence_gaps(match)
     built = [build(match_id, gaps, seed=k) for k, match_id in enumerate(dfl.MATCHES)]
-    model = fit([b[0] for b in built], [b[1] for b in built])
+    model = fit([b[0] for b in built] + [e[1] for e in extra],
+                [b[1] for b in built] + [e[2] for e in extra])
     graded = np.asarray(match.graded)
     p = np.full((match.n_frames, 3), np.nan, dtype=np.float32)
     p[graded] = predict(model, team_shape.compute(match)[graded])
-    os.makedirs(dfl.CACHE, exist_ok=True)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     np.save(path, p)
     return p

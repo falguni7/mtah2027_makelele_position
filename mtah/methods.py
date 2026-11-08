@@ -29,6 +29,8 @@ The methods follow the roadmap steps:
                        instead of ours, and / or its P(D) in the detector; see hmm_v10()
     hmm_v11_mix        hmm_v9_deadA and hmm_v10A with equal weight: both detectors' P(dead) and
                        both team opinions averaged in log-odds, decoded once; see hmm_v11()
+    hmm_v12_mix        hmm_v11_mix with the DFL models also trained on the 3 Metrica matches;
+                       see hmm_v12()
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -172,7 +174,7 @@ def shape_evidence(match, events, columns=None, camera=None):
 
 
 def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_model="boosting",
-           weights=None, name=None):
+           weights=None, name=None, dfl_pool=False):
     """Step 4: hmm_v1 plus team evidence from the shape model away from control events.
 
     Factory: returns the method named "hmm_v<version>" ("hmm_v2" by default). Same Viterbi decoding as hmm_v1, but in long
@@ -212,7 +214,9 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
     equal-weight ensemble of hmm_v9_deadA and hmm_v10A (hmm_v11_mix, built with hmm_v11()): with
     dfl_dead="A" the dead-ball detector is trained twice, once with each model's P(D) and team
     margin as inputs, and the two P(dead) are averaged in log-odds; dfl_team=True averages our
-    shape model's P(home) with the sequence model's. weights, a dict of HMM
+    shape model's P(home) with the sequence model's. dfl_pool=True trains both DFL models with
+    the 3 Metrica matches added to the 7 DFL ones (mtah/external/pool.py; hmm_v12, cached under
+    "pool" names, needs external/metrica/). weights, a dict of HMM
     weights (names in mtah.temporal.hmm.WEIGHT_NAMES), replaces those weights for this method's
     evidence and decoding (mtah.temporal.hmm.weights), e.g. the ones chosen on the DFL benchmark
     (DFL_WEIGHTS); the others keep their module values. name replaces the default
@@ -275,12 +279,25 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
         tables = []                         # the DFL models' (n_frames, 3) P(H), P(A), P(D)
         if use_dfl:
             from mtah.temporal.fusion import average_logodds, calibrate
+            kw = {}
+            if dfl_pool:
+                import os
+                from mtah.external import adapter, dfl
+                from mtah.external import pool as training_pool
+                gaps = adapter.presence_gaps(match)
+                kw = dict(gaps=gaps, extra=training_pool.metrica_entries(gaps))
             if dfl_model in ("boosting", "mix"):
                 from mtah.external import shape_transfer
-                tables.append(shape_transfer.for_match(match))
+                if dfl_pool:
+                    kw["path"] = os.path.join(dfl.CACHE, "bar_ath_shape_pool_v{}.npy".format(
+                        shape_transfer.FEATURE_VERSION))
+                tables.append(shape_transfer.for_match(match, **kw))
             if dfl_model in ("sequence", "mix"):
                 from mtah.external import shape_sequence
-                tables.append(shape_sequence.for_match(match))
+                if dfl_pool:
+                    kw["path"] = os.path.join(dfl.CACHE, "bar_ath_sequence_pool_v{}.npy".format(
+                        shape_sequence.VERSION))
+                tables.append(shape_sequence.for_match(match, **kw))
         dfl = tables[-1] if tables else None     # the team model: the sequence one with "mix"
         detected = [dead_ball.detect(match, table, camera=cam, dfl=t,
                                      whistles=whistles if whistle_features else None)
@@ -444,6 +461,24 @@ def hmm_v11():
     return hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix", name="hmm_v11_mix")
 
 
+def hmm_v12():
+    """hmm_v12_mix: hmm_v11_mix with both DFL models trained on 7 DFL + 3 Metrica matches.
+
+    Everything as hmm_v11 (the half-and-half log-odds average of the two detectors' P(dead) and
+    of the two team opinions, one Viterbi decoding, hmm_v7's weights), except the training data
+    of the boosting shape model and of the TCN + LSTM sequence model: the 3 Metrica sample
+    matches (mtah/external/pool.py: players degraded like ours, labels from Metrica's events,
+    OR rule) join the 7 DFL ones. It replaces hmm_v11_mix only if a rule fixed in advance
+    holds (2026-11-08): the held-out DFL benchmark does not get worse, the held-out Metrica
+    benchmark improves, and on our match the Smart Tagging agreement in the far ball gaps does
+    not fall. Needs PyTorch and external/metrica/ (scripts/data/download_external.sh).
+
+        hmm_v12().__name__                 # -> "hmm_v12_mix"
+    """
+    return hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix", dfl_pool=True,
+                  name="hmm_v12_mix")
+
+
 # HMM weights chosen on the DFL whole-pipeline benchmark (scripts/external/dfl_benchmark.py
 # --wide, "dead" ball placement, best mean spellF1 over all 7 matches): "own_shape" for the
 # variants with our shape model's team evidence (core, deadA_boost), "sequence" for those with
@@ -491,6 +526,7 @@ METHODS = {
     "hmm_v10_deadA": hmm_v10(team=False),
     "hmm_v10A": hmm_v10(),
     "hmm_v11_mix": hmm_v11(),
+    "hmm_v12_mix": hmm_v12(),
     # the same methods with the DFL-chosen HMM weights
     "hmm_v7_dflw": hmm_v2(version=7, weights=DFL_WEIGHTS["own_shape"], name="hmm_v7_dflw"),
     "hmm_v9_deadA_dflw": hmm_v2(version=7, dfl_dead="A", weights=DFL_WEIGHTS["own_shape"],
