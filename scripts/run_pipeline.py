@@ -34,9 +34,10 @@ older cache. With --reuse-cache they are skipped when their output already exist
 meta.json, the WAV file), when only the code has changed.
 
 Output: submissions/BAR-ATH_possession.csv by default (gitignored, like all full-match
-labels), or --out. Runtime 3-4 minutes on an Alex compute node (A100 node, 16 cores), most of
-it step 3; tested from an empty cache (MTAH_CACHE_DIR pointing at a new folder), giving the
-same SHA-256 as the file made step by step.
+labels), or --out. Runtime about 25 minutes on an Alex compute node (A40, 16 cores), nearly
+all of it step 4 (steps 1-2 take seconds to a minute), plus the one-off DFL download. Tested on
+2026-11-14 from a fresh clone of the repository with an empty cache and freshly downloaded DFL
+data, giving the same SHA-256 as the submitted file.
 
     python scripts/run_pipeline.py --reuse-cache --out /tmp/try.csv
     # == 1/3 build cache: skipped, cache/BAR-ATH_tactical exists

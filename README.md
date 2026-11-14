@@ -26,7 +26,7 @@ It builds the numpy cache from the tracking, homography and Smart Tagging, extra
 tactical video's sound (for the referee-whistle detector), runs our method `hmm_v11_mix` and checks
 the result with the official validator. The file is `submissions/BAR-ATH_possession.csv`, and
 its SHA-256 is printed at the end. Nothing is random, so every run gives the same file. It takes
-3-4 minutes on a 16-core node. See `scripts/run_pipeline.py` for the steps.
+about 25 minutes on a 16-core node, plus the one-off download of the DFL data below. See `scripts/run_pipeline.py` for the steps.
 
 Methods that also learn from public labelled matches of other games (`hmm_v9` and later, which
 use the DFL Bundesliga open data, CC BY 4.0, including the submitted `hmm_v11_mix`) need
