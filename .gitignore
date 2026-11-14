@@ -97,3 +97,12 @@ env/
 scripts/validation/video_alignment.py
 scripts/validation/compare_spells.py
 scripts/validation/diff_segments.py
+
+# -- teammate's vision clone ----------------------------------------------------------------------
+# A separate clone of the challenge repo (own .git, own copy of the match data) holding the WASB
+# ball detection; kept out of this repository entirely.
+/vision/
+
+# -- third-party code ------------------------------------------------------------------------------
+# WASB-SBDT (nttcom, MIT), cloned at commit 923462c, with its pretrained weights. Not ours to commit.
+/third_party/

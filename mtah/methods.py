@@ -31,6 +31,11 @@ The methods follow the roadmap steps:
                        both team opinions averaged in log-odds, decoded once; see hmm_v11()
     hmm_v12_mix        hmm_v11_mix with the DFL models also trained on the 3 Metrica matches;
                        see hmm_v12()
+    hmm_v13_wasb       hmm_v11_mix whose control rule uses the tracking ball corrected by the
+                       fine-tuned WASB (mtah/vision/ball.py); see hmm_v2(wasb_ball=True)
+    hmm_v14_gap        hmm_v11_mix whose control rule also sees the ball in the tracking ball's
+                       gaps where the fine-tuned WASB finds it, linked to the tracking ball
+                       (mtah.vision.ball.filled_match); see hmm_v2(wasb_gaps=True)
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -174,7 +179,8 @@ def shape_evidence(match, events, columns=None, camera=None):
 
 
 def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_model="boosting",
-           weights=None, name=None, dfl_pool=False):
+           weights=None, name=None, dfl_pool=False, wasb_ball=False,
+           wasb_gaps=False):
     """Step 4: hmm_v1 plus team evidence from the shape model away from control events.
 
     Factory: returns the method named "hmm_v<version>" ("hmm_v2" by default). Same Viterbi decoding as hmm_v1, but in long
@@ -222,7 +228,16 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
     (DFL_WEIGHTS); the others keep their module values. name replaces the default
     name. Methods with a DFL option have method.needs_dfl = True: they
     need the DFL open data in external/dfl/ (scripts/data/download_external.sh --dfl-only),
-    which scripts/run_pipeline.py fetches when it is missing.
+    which scripts/run_pipeline.py fetches when it is missing. wasb_ball=True runs the step-2
+    control rule on the tracking ball corrected by the fine-tuned WASB
+    (mtah.vision.ball.corrected_match; hmm_v13_wasb); everything else keeps the tracking ball.
+    wasb_gaps=True also fills the tracking ball's gaps with WASB where it is confident, on the
+    pitch, consistent over time and linked to the tracking ball at a gap edge
+    (mtah.vision.ball.filled_match; hmm_v14_gap): 6,458 of 64,643 gap frames, control events
+    852 -> 900. Both only change the ball the step-2 control rule sees; the dead-ball detectors
+    and the team-shape models keep the tracking ball.
+    Such methods have method.needs_wasb = True: they need the WASB peaks in
+    mtah.vision.ball.CACHE / GAPS_CACHE (scripts/vision/wasb_ball.py [--gaps], one GPU job each).
 
         method = hmm_v2()
         method.__name__                        # -> "hmm_v2"
@@ -316,7 +331,14 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
                 p_dead = explain.soften(average_logodds(p_dead, dfl_dead_p), unexplained)
             else:
                 p_dead = explain.soften(p_dead, unexplained)
-        events = control_events(match)
+        ball_match = match
+        if wasb_ball:
+            from mtah.vision.ball import corrected_match
+            ball_match = corrected_match(ball_match)
+        if wasb_gaps:
+            from mtah.vision.ball import filled_match
+            ball_match = filled_match(ball_match)
+        events = control_events(ball_match)
         p_home, frames = shape_evidence(match, events, columns, camera=cam)
         if dfl_team:
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -358,6 +380,7 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
     method.evidence = evidence
     method.weights = dict(weights or {})
     method.needs_dfl = use_dfl              # needs external/dfl/ (scripts/run_pipeline.py)
+    method.needs_wasb = wasb_ball or wasb_gaps   # needs mtah.vision.ball.CACHE / GAPS_CACHE
     method.__name__ = name or "hmm_v{}".format(version)
     return method
 
@@ -526,6 +549,12 @@ METHODS = {
     "hmm_v10_deadA": hmm_v10(team=False),
     "hmm_v10A": hmm_v10(),
     "hmm_v11_mix": hmm_v11(),
+    # hmm_v11_mix with the control rule on the WASB-corrected ball (mtah/vision/ball.py)
+    "hmm_v13_wasb": hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix",
+                           wasb_ball=True, name="hmm_v13_wasb"),
+    # hmm_v11_mix with the tracking ball's gaps filled by WASB for the control rule
+    "hmm_v14_gap": hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix",
+                          wasb_gaps=True, name="hmm_v14_gap"),
     "hmm_v12_mix": hmm_v12(),
     # the same methods with the DFL-chosen HMM weights
     "hmm_v7_dflw": hmm_v2(version=7, weights=DFL_WEIGHTS["own_shape"], name="hmm_v7_dflw"),
