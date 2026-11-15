@@ -39,6 +39,18 @@ The methods follow the roadmap steps:
     hmm_v14_gap        hmm_v11_mix whose control rule also sees the ball in the tracking ball's
                        gaps where the fine-tuned WASB finds it, linked to the tracking ball
                        (mtah.vision.ball.filled_match); see hmm_v2(wasb_gaps=True)
+    hmm_v16_touch      hmm_v11_mix where a switch into H or A costs extra on frames where the
+                       tracking ball clearly was not played (mtah.possession.touches); see
+                       hmm_v2(touch=True)
+    hmm_v17_doubt      hmm_v11_mix where ball-only confident ALIVE just after a whistle, with
+                       the players walking or nobody near the ball, is left unknown (not
+                       pinned, not trained on); see hmm_v2(alive_doubt=True)
+    hmm_v18_doubtB     the same anywhere in the match, not only after whistles; see
+                       hmm_v2(alive_doubt="everywhere")
+    hmm_v19_bridge     hmm_v11_mix plus hmm_v18_doubtB's D only where it fills a whole alive
+                       stretch between two hmm_v11_mix stoppages; see hmm_v19()
+    hmm_v20_adjacent   the same wherever it touches a hmm_v11_mix stoppage on either side; see
+                       hmm_v19(sides="any")
 
     from mtah.data import load
     from mtah.methods import METHODS
@@ -183,7 +195,7 @@ def shape_evidence(match, events, columns=None, camera=None):
 
 def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_model="boosting",
            weights=None, name=None, dfl_pool=False, wasb_ball=False,
-           wasb_gaps=False, tag_team=False, tag_dead=False):
+           wasb_gaps=False, tag_team=False, tag_dead=False, touch=False, alive_doubt=False):
     """Step 4: hmm_v1 plus team evidence from the shape model away from control events.
 
     Factory: returns the method named "hmm_v<version>" ("hmm_v2" by default). Same Viterbi decoding as hmm_v1, but in long
@@ -245,6 +257,21 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
     control events. tag_dead=True adds the in_possession_tag column (mtah.features.frame) to the
     dead-ball classifier's inputs, so it learns from the confident labels how often a phase is
     dead. With either, Smart Tagging agreement is no longer an independent check (hmm_v15_tag).
+    touch=True applies the physics that possession only changes when someone plays the ball:
+    on frames where the tracking ball was tracked for about a second with a nearly constant
+    velocity (mtah.possession.touches.no_touch_costs), a switch into H or A (from H, A or D)
+    costs NO_TOUCH_COST (4) extra in the decoding; entering D does not (hmm_v16_touch). A missed
+    stoppage, where the ball lies still, then usually decodes as H -> D -> A with the restart at
+    the kick. It uses the tracking ball of the match it is given (masked frames give no
+    evidence).
+    alive_doubt=True drops doubtful frames from the confident ALIVE labels
+    (mtah.dead_ball.detector.doubtful_ball_alive): frames where only the ball rule says alive,
+    from 1 s before to 8 s after a referee's whistle, with the players walking (under 1.5 m/s
+    over 3 s) or nobody within 3 m of the ball, become UNKNOWN. They are then neither pinned
+    against D in the HMM nor training examples of the dead-ball classifier, so a stoppage after
+    a whistle where the ball rolls on can decode as D (hmm_v17_doubt). Needs version >= 4 (the
+    whistles). alive_doubt="everywhere" applies the same rule anywhere in the match, whistle or
+    not (hmm_v18_doubtB). The DFL sequence model's fine-tuning keeps the default labels.
     Such methods have method.needs_wasb = True: they need the WASB peaks in
     mtah.vision.ball.CACHE / GAPS_CACHE (scripts/vision/wasb_ball.py [--gaps], one GPU job each).
 
@@ -277,6 +304,10 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
     if dfl_model == "mix" and (dfl_dead == "B" or dfl_team == "replace"):
         raise ValueError("dfl_model='mix' averages: it takes dfl_dead None or 'A' and dfl_team "
                          "False or True")
+    if alive_doubt not in (False, True, "everywhere"):
+        raise ValueError("alive_doubt must be False, True or 'everywhere'")
+    if alive_doubt is True and not use_whistles:
+        raise ValueError("alive_doubt=True needs the whistles: version >= 4")
     if soften_dfl == "detector" and dfl_dead != "B":
         raise ValueError("soften_dfl='detector' needs dfl_dead='B' (A mixes the two in one model)")
 
@@ -286,7 +317,8 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
         (events, p_dead, dead_labels, p_home, shape_frames, switch): the step-2 control events,
         the step-1 P(dead) (softened in unexplained gaps from version 6) and confident labels,
         the step-4 shape model's P(home) and the frames to use it on, and the whistle switch
-        costs (None before version 4). Exposed as method.evidence, so checks can compute the
+        costs (None before version 4; with touch=True a third array, the no-touch costs, and
+        constant DEAD_SWITCH enter / leave costs if there are no whistles). Exposed as method.evidence, so checks can compute the
         posteriors of exactly the evidence the method decodes.
 
             args = hmm_v2(version=7).evidence(match)
@@ -325,7 +357,9 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
         dfl = tables[-1] if tables else None     # the team model: the sequence one with "mix"
         det_columns = list(dead_ball.detector.COLUMNS) + (["in_possession_tag"] if tag_dead else [])
         detected = [dead_ball.detect(match, table, camera=cam, dfl=t, columns=det_columns,
-                                     whistles=whistles if whistle_features else None)
+                                     whistles=whistles if whistle_features else None,
+                                     doubt={True: whistles, "everywhere": "everywhere"}.get(
+                                         alive_doubt))
                     for t in (tables if dfl_dead == "A" else [None])]
         _, p_dead, dead_labels = detected[0]  # the confident labels never depend on dfl
         if len(detected) == 2:                  # "mix": one detector per model, averaged
@@ -361,6 +395,12 @@ def hmm_v2(version=2, dfl_team=False, dfl_dead=None, soften_dfl="combined", dfl_
             from mtah.possession.tags import add_phase_evidence
             p_home = add_phase_evidence(p_home, match, events)
         switch = whistle_switch_costs(match.n_frames, whistles) if use_whistles else None
+        if touch:
+            from mtah.possession.touches import no_touch_costs
+            from mtah.temporal import hmm
+            if switch is None:
+                switch = (np.full(match.n_frames, hmm.DEAD_SWITCH),) * 2
+            switch = (*switch, no_touch_costs(match))
         return events, p_dead, dead_labels, p_home, frames, switch
 
     def evidence(match):
@@ -497,6 +537,38 @@ def hmm_v11():
     return hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix", name="hmm_v11_mix")
 
 
+def hmm_v19(sides="both"):
+    """hmm_v19_bridge: hmm_v11_mix, joining two of its stoppages where hmm_v18_doubtB says so.
+
+    Runs hmm_v11_mix and hmm_v18_doubtB on the match and combines their labels with
+    mtah.temporal.fusion.bridge_dead: an alive stretch of hmm_v11_mix (H or A) between two of
+    its D stretches becomes D when hmm_v18_doubtB calls all of it D. Everything else is
+    hmm_v11_mix's. The idea (the user's, 2026-11-15): both stoppages around the stretch come from
+    hmm_v11_mix, and the stretch itself is where the ball still moved, which hmm_v18_doubtB no
+    longer pins alive. On BAR-ATH this is 4 stretches, 593 frames. sides="any" also takes
+    hmm_v18_doubtB's D where it touches a hmm_v11_mix stoppage on one side only, so stoppages
+    start earlier or end later (hmm_v20_adjacent; 113 stretches, 4,346 frames on BAR-ATH). Runs
+    both methods (the DFL models' predictions are cached, so less than twice hmm_v11_mix's
+    time); needs the DFL models as hmm_v11_mix does.
+
+        hmm_v19().__name__                 # -> "hmm_v19_bridge"
+        hmm_v19(sides="any").__name__      # -> "hmm_v20_adjacent"
+        # hmm_v11_mix D D H H D, hmm_v18_doubtB D D D D D  -> D D D D D   (both)
+        # hmm_v11_mix D D H H H, hmm_v18_doubtB D D D D H  -> D D D D H   (any only)
+    """
+    from mtah.temporal.fusion import bridge_dead
+    base, other = hmm_v11(), hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix",
+                                    alive_doubt="everywhere", name="hmm_v18_doubtB")
+
+    def method(match):
+        """(n_frames,) labels: hmm_v11_mix's, bridged with hmm_v18_doubtB's D."""
+        return bridge_dead(base(match), other(match), match.graded, sides)
+    method.needs_dfl = True
+    method.needs_wasb = False
+    method.__name__ = {"both": "hmm_v19_bridge", "any": "hmm_v20_adjacent"}[sides]
+    return method
+
+
 def hmm_v12():
     """hmm_v12_mix: hmm_v11_mix with both DFL models trained on 7 DFL + 3 Metrica matches.
 
@@ -571,6 +643,19 @@ METHODS = {
     # hmm_v11_mix plus Smart Tagging's in-possession phases (team evidence and dead-ball input)
     "hmm_v15_tag": hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix",
                           tag_team=True, tag_dead=True, name="hmm_v15_tag"),
+    # hmm_v11_mix plus "no touch, no switch into possession" (mtah.possession.touches)
+    "hmm_v16_touch": hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix",
+                            touch=True, name="hmm_v16_touch"),
+    # hmm_v11_mix with doubtful ball-only confident ALIVE after whistles left unknown
+    "hmm_v17_doubt": hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix",
+                            alive_doubt=True, name="hmm_v17_doubt"),
+    # the same anywhere in the match (variant B)
+    "hmm_v18_doubtB": hmm_v2(version=7, dfl_team=True, dfl_dead="A", dfl_model="mix",
+                             alive_doubt="everywhere", name="hmm_v18_doubtB"),
+    # hmm_v11_mix with hmm_v18_doubtB's D where it joins two hmm_v11_mix stoppages
+    "hmm_v19_bridge": hmm_v19(),
+    # the same wherever it touches a hmm_v11_mix stoppage on either side
+    "hmm_v20_adjacent": hmm_v19(sides="any"),
     "hmm_v12_mix": hmm_v12(),
     # the same methods with the DFL-chosen HMM weights
     "hmm_v7_dflw": hmm_v2(version=7, weights=DFL_WEIGHTS["own_shape"], name="hmm_v7_dflw"),

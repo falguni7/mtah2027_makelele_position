@@ -18,7 +18,10 @@ Three stages:
               the ball tracked out of the pitch, and the first seconds of a tagged set piece
               (the restart comes ~5 s after the tag start)
        alive  the ball tracked for 3 s and moving inside the pitch, away from any tag, and
-              sustained running by the players, ball tracked or not
+              sustained running by the players, ball tracked or not; optionally not when only
+              the ball rule fires while the players walk or nobody is near the ball, just
+              after a referee's whistle (hmm_v17_doubt) or anywhere (hmm_v18_doubtB;
+              doubtful_ball_alive)
   2. a classifier trained on those frames using PLAYER features and the ball-gap context, not
      the ball's speed or position, so it cannot just learn the rules back; alive examples inside
      short open-play gaps stop it from learning "ball missing = dead". Optionally also the
@@ -69,11 +72,72 @@ MIN_DEAD = 2 * FPS
 MIN_ALIVE = FPS
 # Second-half kick-off, video frame (DATA.md, FAQ.md); the graded frames before it are all D.
 KICKOFF_2ND = 113742
+# Doubtful ball-only ALIVE (optional, hmm_v17_doubt / hmm_v18_doubtB): after a whistle for a foul
+# or offside the ball often rolls on or is played back faster than ALIVE_BALL_SPEED while the
+# players stop, and no set-piece tag may follow. Such frames are left UNKNOWN when only the ball
+# rule fires: near whistles (hmm_v17_doubt) or anywhere in the match (hmm_v18_doubtB).
+DOUBT_WINDOW = (-1.0, 8.0)          # seconds around a whistle's start (whistle variant only)
+DOUBT_PLAYER_SPEED = 1.5            # m/s, speed_mean_3s below this = players walking
+DOUBT_NEAR = 3.0                    # metres: a player this close to the ball could be playing it
+DOUBT_NEAR_HALF = FPS // 2 + 1      # +/- 13 frames (about 0.5 s) to find such a player
 MODEL = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, l2_regularization=1.0,
              random_state=0)
 
 
-def confident_labels(match, table, use_set_pieces=True, running_alive=True):
+def nearest_player(match):
+    """(n_frames,) distance in metres from the ball to the nearest present player.
+
+    NaN where the ball is not tracked or no player is present. Uses match.ball_xy (n, 2),
+    match.players_xy (n, players, 2) and the masks match.ball_present / match.player_present.
+
+        # one frame, ball at (0, 0), players at (3, 4) and (6, 8), both present -> [5.0]
+        # the same frame with the ball not tracked                            -> [nan]
+    """
+    players = np.asarray(match.players_xy, dtype=np.float64)
+    ball = np.asarray(match.ball_xy, dtype=np.float64)
+    dist = np.linalg.norm(players - ball[:, None, :], axis=2)
+    dist[~np.asarray(match.player_present)] = np.inf
+    dist[~np.isfinite(dist)] = np.inf
+    out = dist.min(axis=1) if dist.shape[1] else np.full(len(ball), np.inf)
+    out[~np.isfinite(out) | ~np.asarray(match.ball_present)] = np.nan
+    return out
+
+
+def doubtful_ball_alive(match, table, whistles=None):
+    """(n_frames,) bool: frames where the ball rule's ALIVE is doubtful.
+
+    A frame is doubtful when the players walk
+    (speed_mean_3s below DOUBT_PLAYER_SPEED, 1.5 m/s) or no player is within DOUBT_NEAR (3 m)
+    of the ball on any frame within +/- DOUBT_NEAR_HALF (13) frames. With whistles
+    ((start_s, ...) tuples on the video timeline, as mtah.audio.whistle.match_whistles()) the
+    frame must also lie from DOUBT_WINDOW[0] (-1 s) to DOUBT_WINDOW[1] (+8 s) around a whistle's
+    start (hmm_v17_doubt); without (None), anywhere (hmm_v18_doubtB). confident_labels applies
+    it only to frames where the ball rule is the only alive rule that fires: sustained running
+    and open-play gaps stay ALIVE. On BAR-ATH (70 whistles) 1,350 ball-only ALIVE frames lie in
+    the window; 42 % have walking players and 23 % nobody within 3 m. Of all 28,699 ball-only
+    ALIVE frames, 20 % have walking players and 10 % nobody within 3 m.
+
+        # a whistle at 10 s; frame 300 (12 s) with players at 1.2 m/s       -> True
+        # frame 300 with players at 2.4 m/s and one 1 m from the ball       -> False
+        # frame 600 (24 s, far from the whistle) with players at 1.2 m/s    -> False
+        # frame 600 with players at 1.2 m/s, whistles=None (anywhere)       -> True
+    """
+    n = match.n_frames
+    window = np.zeros(n, dtype=bool) if whistles is not None else np.ones(n, dtype=bool)
+    for start_s, *_ in (whistles or ()):
+        first = max(0, int(round((start_s + DOUBT_WINDOW[0]) * FPS)))
+        last = min(n, int(round((start_s + DOUBT_WINDOW[1]) * FPS)))
+        window[first:last] = True
+    walking = table["speed_mean_3s"].to_numpy() < DOUBT_PLAYER_SPEED
+    close = (nearest_player(match) <= DOUBT_NEAR).astype(np.int64)   # NaN -> not close
+    count = np.concatenate(([0], np.cumsum(close)))
+    i = np.arange(n)
+    nobody = (count[np.minimum(i + DOUBT_NEAR_HALF + 1, n)]
+              - count[np.maximum(i - DOUBT_NEAR_HALF, 0)]) == 0
+    return window & (walking | nobody)
+
+
+def confident_labels(match, table, use_set_pieces=True, running_alive=True, doubt=None):
     """int8 per frame: DEAD, ALIVE or UNKNOWN. Only graded frames get a label.
 
     Stage 1. match is the cached Match, which must have match.smart_tagging (it is required; a
@@ -95,6 +159,11 @@ def confident_labels(match, table, use_set_pieces=True, running_alive=True):
               running_alive)
       near a tag   from 5 s before to 10 s after a SET PIECES tag start, or from 5 s before
               the start to 10 s after the end of a GOALS tag; never ALIVE
+      doubt   if doubt is given, frames where the ball rule is the only alive rule that
+              fires and doubtful_ball_alive is True stay UNKNOWN: neither pinned alive in the
+              HMM nor used to train the classifier. doubt is whistle events (as
+              mtah.audio.whistle.match_whistles()) for doubt near whistles only
+              (hmm_v17_doubt), or "everywhere" for the whole match (hmm_v18_doubtB)
 
     Toy frames, all graded and far from any tag:
 
@@ -105,16 +174,20 @@ def confident_labels(match, table, use_set_pieces=True, running_alive=True):
         ball lost 30 s, players walking                          -> UNKNOWN
         1 s after the start of a corner (SET PIECES) tag         -> DEAD
         8 s after it, ball moving fast inside the pitch          -> UNKNOWN (near the tag)
+        with doubt: 3 s after a whistle, ball rolling at 4 m/s,
+            players walking at 1.2 m/s                           -> UNKNOWN (doubtful)
+        with doubt: the same, players running (rule fires)       -> ALIVE
     """
     n = match.n_frames
     labels = np.full(n, UNKNOWN, dtype=np.int8)
     graded = np.asarray(match.graded)
 
-    alive = (graded
-             & (table["ball_present"].to_numpy() > 0)
-             & (table["ball_speed_1s"].to_numpy() > ALIVE_BALL_SPEED)
-             & (table["ball_present_3s"].to_numpy() == 1)
-             & (table["ball_line_dist"].to_numpy() > ALIVE_LINE_DIST))
+    ball_alive = (graded
+                  & (table["ball_present"].to_numpy() > 0)
+                  & (table["ball_speed_1s"].to_numpy() > ALIVE_BALL_SPEED)
+                  & (table["ball_present_3s"].to_numpy() == 1)
+                  & (table["ball_line_dist"].to_numpy() > ALIVE_LINE_DIST))
+    alive = np.zeros(n, dtype=bool)       # the gap and running rules
     dead = np.zeros(n, dtype=bool)
     near_tag = np.zeros(n, dtype=bool)
 
@@ -160,6 +233,12 @@ def confident_labels(match, table, use_set_pieces=True, running_alive=True):
         alive |= ((table["speed_mean_3s"].to_numpy() > RUN_ALIVE_SPEED)
                   & (table["run_share_3s"].to_numpy() > RUN_ALIVE_SHARE))
 
+    if doubt is not None:
+        if isinstance(doubt, str) and doubt != "everywhere":
+            raise ValueError("doubt must be None, whistle events or 'everywhere'")
+        whistles = None if isinstance(doubt, str) else doubt
+        ball_alive &= alive | ~doubtful_ball_alive(match, table, whistles)
+    alive |= ball_alive
     labels[graded & alive & ~near_tag] = ALIVE
     labels[graded & dead] = DEAD
     return labels
@@ -266,7 +345,7 @@ def decode(p_dead, labels, graded):
 
 
 def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=True,
-           whistles=None, camera=None, dfl=None):
+           whistles=None, camera=None, dfl=None, doubt=None):
     """(dead mask, raw P(dead), confident labels) for every video frame.
 
     The whole detector: confident_labels, train, predict, decode. match is the cached Match
@@ -278,7 +357,10 @@ def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=Tru
     mtah.features.camera.compute(match); its CAMERA columns are added the same way. dfl, if
     given, is the (n_frames, 3) P(H), P(A), P(D) of the DFL-trained shape model
     (mtah.external.shape_transfer.for_match); its DFL columns are added the same way (hmm_v9,
-    option A). None of them changes the confident labels, only what the classifier sees. Returns a bool array
+    option A). None of them changes the confident labels, only what the classifier sees.
+    doubt, if given, is whistle events or "everywhere" for confident_labels' doubtful
+    ball-only rule (hmm_v17_doubt / hmm_v18_doubtB): it changes the confident labels, so both the classifier's training frames
+    and the returned labels (the HMM's pins). Returns a bool array
     (dead = D), a float32 array of the classifier's P(dead) before decoding and the int8
     labels, all of length n_frames.
 
@@ -288,6 +370,8 @@ def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=Tru
         detect(match, table, whistles=match_whistles())   # with the whistle features
         detect(match, table, camera=camera.compute(match))  # with the camera's turning speed
         detect(match, table, dfl=shape_transfer.for_match(match))   # with the DFL model's P(D)
+        detect(match, table, doubt=match_whistles())   # doubtful ball-only ALIVE left UNKNOWN
+        detect(match, table, doubt="everywhere")       # the same anywhere in the match
     """
     if whistles is not None:
         from mtah.audio.whistle import timing_features
@@ -302,7 +386,7 @@ def detect(match, table, use_set_pieces=True, columns=COLUMNS, running_alive=Tru
             margin = np.abs(dfl[:, 0] - dfl[:, 1]) / (dfl[:, 0] + dfl[:, 1])
         table = table.assign(dfl_dead=dfl[:, 2], dfl_team_margin=margin)
         columns = list(columns) + [c for c in DFL if c not in columns]
-    labels = confident_labels(match, table, use_set_pieces, running_alive)
+    labels = confident_labels(match, table, use_set_pieces, running_alive, doubt)
     model = train(table, labels, columns)
     p_dead = predict(model, table, columns)
     return decode(p_dead, labels, np.asarray(match.graded)), p_dead, labels

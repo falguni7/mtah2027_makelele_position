@@ -17,13 +17,19 @@ maps it onto our match's scale with a one-input logistic fit on the dead-ball de
 confident labels (frames the dead-ball rules are sure of; mtah/dead_ball/detector.py). Those
 are the easier frames, so this fixes the scale, not the hard cases.
 
-In this file: logit(), average_logodds() and calibrate().
+Label files can be combined too: bridge_dead() takes a base method's labels and adds another
+method's D only where it fills a whole alive stretch between two of the base's own stoppages
+(hmm_v19_bridge: hmm_v11_mix plus hmm_v18_doubtB's bridges), or, with sides="any", wherever it
+touches one of them (hmm_v20_adjacent).
+
+In this file: logit(), average_logodds(), calibrate() and bridge_dead().
 """
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 
 from mtah.dead_ball.detector import ALIVE, DEAD
+from mtah.utils import runs_of
 
 # Params
 EPS = 1e-4                  # probabilities are kept inside [EPS, 1 - EPS] before the log
@@ -79,4 +85,43 @@ def calibrate(p, labels, stride=STRIDE):
     out = np.full(len(x), np.nan, dtype=np.float32)
     ok = np.isfinite(x)
     out[ok] = model.predict_proba(x[ok, None])[:, 1]
+    return out
+
+
+def bridge_dead(base, other, graded, sides="both"):
+    """base's labels, with other's D on alive stretches of base next to base's own D.
+
+    base and other are (n,) label arrays ("H", "A", "D", "X") of the same match, graded the
+    bool mask of graded frames. A conversion is a maximal run of graded frames where base says
+    H or A and other says D. With sides="both" (hmm_v19_bridge) it is taken over (set to D) only
+    when base is D on the graded frame just before it and on the graded frame just after it:
+    other then calls the whole alive stretch between two of base's stoppages dead, so the two
+    stoppages become one; conversions that touch a stoppage on one side only, or none, are left
+    as base has them. With sides="any" (hmm_v20_adjacent) a conversion is taken over when base
+    is D on at least one of the two sides: base's stoppages are also made to start earlier or
+    end later. Conversions touching no stoppage are always left. Returns a new array; base and
+    other are not changed.
+
+        base  = ["D", "H", "H", "D", "A", "A", "H", "A"]
+        other = ["D", "D", "D", "D", "D", "A", "D", "D"]
+        bridge_dead(base, other, [True] * 8)
+        # -> ["D", "D", "D", "D", "A", "A", "H", "A"]
+        # frames 1-2 lie between base's D at 0 and 3: bridged. Frame 4 touches D only before,
+        # frames 6-7 none: kept.
+        bridge_dead(base, other, [True] * 8, sides="any")
+        # -> ["D", "D", "D", "D", "D", "A", "H", "A"]     frame 4 now too, frames 6-7 still kept
+    """
+    if sides not in ("both", "any"):
+        raise ValueError("sides must be 'both' or 'any'")
+    base = np.asarray(base)
+    other = np.asarray(other)
+    graded = np.asarray(graded, dtype=bool)
+    n = len(base)
+    out = base.copy()
+    conv = graded & np.isin(base, ["H", "A"]) & (other == "D")
+    for start, stop in runs_of(conv):
+        before = start > 0 and graded[start - 1] and base[start - 1] == "D"
+        after = stop < n and graded[stop] and base[stop] == "D"
+        if (before and after) if sides == "both" else (before or after):
+            out[start:stop] = "D"
     return out

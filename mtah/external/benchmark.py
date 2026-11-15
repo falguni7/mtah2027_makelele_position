@@ -87,6 +87,14 @@ VARIANTS = {
     "deadA_boost_pool": dict(dead="boosting", team=None, pool=True),
     "A_seq_pool": dict(dead="sequence", team="sequence", pool=True),
     "mix_pool": dict(dead="mix", team="mix", pool=True),
+    # "mix" plus the no-touch switch costs (hmm_v16_touch, mtah.possession.touches)
+    "mix_touch": dict(dead="mix", team="mix", touch=True),
+    # "mix" with doubtful ball-only confident ALIVE left unknown anywhere (hmm_v18_doubtB)
+    "mix_doubtB": dict(dead="mix", team="mix", doubt="everywhere"),
+    # "mix" plus "mix_doubtB"'s D where it joins two "mix" stoppages (hmm_v19_bridge)
+    "mix_bridge": dict(dead="mix", team="mix", bridge="mix_doubtB"),
+    # the same wherever it touches a "mix" stoppage on either side (hmm_v20_adjacent)
+    "mix_adjacent": dict(dead="mix", team="mix", bridge="mix_doubtB", sides="any"),
 }
 WEIGHTS = hmm.WEIGHT_NAMES
 DEFAULT = {w: getattr(hmm, w) for w in WEIGHTS}       # the weights every method uses today
@@ -179,6 +187,7 @@ def evidence(match, truth, variant, team_table=None, probs=None):
     """The HMM's inputs for one benchmark match and variant, as a dict.
 
     Keys events, p_dead, dead_labels, p_home, frames: the arguments of hmm.decode after match,
+    and touch: the no-touch costs for a variant with touch=True, else None,
     built as hmm_v3 builds them (methods.hmm_v2, version 3: no whistles, no camera, no
     softening), with the VARIANTS changes. Our shape model reads the ball-free DFL shape table
     (shape_transfer.COLUMNS, cached by shape_transfer.build; pass team_table to reuse one).
@@ -193,6 +202,13 @@ def evidence(match, truth, variant, team_table=None, probs=None):
     spec = VARIANTS[variant]
     if team_table is None:
         team_table, _ = st.build(truth.match_id, None, seed=truth.k)
+    if spec.get("bridge"):                  # two variants' evidence, combined at decoding
+        base = {k: v for k, v in spec.items() if k not in ("bridge", "sides")}
+        name = next(k for k, v in VARIANTS.items() if v == base)
+        ev = evidence(match, truth, name, team_table, probs)
+        ev["bridge"] = evidence(match, truth, spec["bridge"], team_table, probs)
+        ev["sides"] = spec.get("sides", "both")
+        return ev
     table = features.compute(match)
     if probs is None:
         def get(model):
@@ -200,7 +216,8 @@ def evidence(match, truth, variant, team_table=None, probs=None):
     else:
         get = probs.__getitem__
     models = {None: [None], "mix": ["boosting", "sequence"]}.get(spec["dead"], [spec["dead"]])
-    detected = [dead_ball.detect(match, table, dfl=get(m) if m else None) for m in models]
+    detected = [dead_ball.detect(match, table, dfl=get(m) if m else None,
+                                 doubt=spec.get("doubt")) for m in models]
     _, p_dead, dead_labels = detected[0]
     if len(detected) == 2:                  # "mix": the two detectors' P(dead) averaged
         p_dead = average_logodds(p_dead, detected[1][1])
@@ -217,22 +234,39 @@ def evidence(match, truth, variant, team_table=None, probs=None):
             p_home = np.where(np.isfinite(theirs), theirs, p_home).astype(np.float32)
     from sklearn.metrics import roc_auc_score
     finite = np.isfinite(p_dead) & np.isin(truth.labels, ["H", "A", "D"])
+    switch = None
+    if spec.get("touch"):
+        from mtah.possession.touches import no_touch_costs
+        switch = no_touch_costs(match)      # enter / leave added at decoding (weights apply)
     return {"events": events, "p_dead": p_dead, "dead_labels": dead_labels, "p_home": p_home,
-            "frames": shape_model.gap_frames(match, events),
+            "frames": shape_model.gap_frames(match, events), "touch": switch,
             "d_auc": float(roc_auc_score((truth.labels == "D")[finite], p_dead[finite]))}
 
 
 def decode(match, ev, values):
     """H / A / D labels from the evidence dict of evidence() with the HMM weights `values`.
 
-    Missing names keep their module value. Exactly hmm.decode, only with other weights.
+    Missing names keep their module value. Exactly hmm.decode, only with other weights. A
+    variant with touch=True (ev["touch"] not None) decodes with the switch costs (DEAD_SWITCH,
+    DEAD_SWITCH, ev["touch"]): no whistles, as everywhere in the benchmark, plus the no-touch
+    costs. A bridge variant (ev["bridge"], the other variant's evidence) decodes both and
+    joins the base's stoppages with mtah.temporal.fusion.bridge_dead (hmm_v19_bridge).
 
         decode(match, ev, DEFAULT)                    # today's weights
         decode(match, ev, {**DEFAULT, "TEAM_WEIGHT": 0.2})
     """
+    if ev.get("bridge") is not None:
+        from mtah.temporal.fusion import bridge_dead
+        return bridge_dead(decode(match, {**ev, "bridge": None}, values),
+                           decode(match, ev["bridge"], values), match.graded,
+                           ev.get("sides", "both"))
     with hmm.weights(values):
+        switch = None
+        if ev.get("touch") is not None:
+            constant = np.full(match.n_frames, hmm.DEAD_SWITCH)
+            switch = (constant, constant, ev["touch"])
         return hmm.decode(match, ev["events"], ev["p_dead"], ev["dead_labels"], ev["p_home"],
-                          ev["frames"])
+                          ev["frames"], switch)
 
 
 def score(labels, pred, half):

@@ -48,6 +48,13 @@ This never forces a stoppage: it only lowers the price of a boundary where the o
 already asks for one, so a stoppage can start or end at the whistle instead of where p_dead
 happens to cross over. whistle_switch_costs() builds the per-frame costs.
 
+No touch (optional, hmm_v16_touch): possession can only change when someone plays the ball. On
+frames where the tracking ball clearly was NOT played (tracked for a second at a nearly constant
+velocity: mtah.possession.touches.no_touch_costs), a switch into H or A costs
+touches.NO_TOUCH_COST (4) extra. It is the third array of the switch costs, (enter, leave,
+touch): added to H <-> A and to leaving D, never to entering D (the ball can go out without a
+touch).
+
 Values are chosen from these arguments, not tuned on labels.
 
 What is in it: emissions() builds the (frames, 3) evidence table above, transition_matrix() the
@@ -242,7 +249,9 @@ def viterbi(score, transition, switch=None):
     outweighs the switch cost, so a one-frame blip is smoothed away but a sustained change is not.
     switch, if given, is (enter, leave) from whistle_switch_costs() for these frames: the cost
     of entering D, and of leaving it, into each frame, replacing the fixed DEAD_SWITCH of
-    transition (H <-> A keeps its cost).
+    transition (H <-> A keeps its cost). It may carry a third array, touch
+    (mtah.possession.touches.no_touch_costs): an extra cost of every switch INTO H or A into
+    that frame (H <-> A and leaving D), added on top; entering D never pays it.
 
         transition = transition_matrix()       # H <-> A costs 2
         score = [[0, -3, -5],                  # frame 0 says H
@@ -259,19 +268,33 @@ def viterbi(score, transition, switch=None):
         score = [[0, -9, -9], [-3, -9, 0], [-3, -9, 0], [0, -9, -9]]
         viterbi(score, transition)                         # -> [0, 0, 0, 0]
         viterbi(score, transition, ([4, 1, 4, 4], [4, 4, 4, 1]))   # -> [0, 2, 2, 0]
+
+        # frames 2-3 lean A by 1.5 each (3 > the switch cost 2): H H A A. With no touch on
+        # frame 2, H -> A there costs 2 + 4, and switching into frame 3 instead gains only
+        # 1.5 < 2, so the path stays H
+        score = [[0, -9, -9], [0, -1.5, -9], [0, 1.5, -9], [0, 1.5, -9]]
+        viterbi(score, transition)                                     # -> [0, 0, 1, 1]
+        viterbi(score, transition, ([4] * 4, [4] * 4, [0, 0, 4, 0]))   # -> [0, 0, 0, 0]
     """
     n = len(score)
     back = np.zeros((n, 3), dtype=np.int8)
     best = list(np.asarray(score[0], dtype=np.float64))
     trans = transition.tolist()
+    team = trans[0][1]
+    touch = None
     if switch is not None:
-        enter, leave = (np.asarray(costs, dtype=np.float64).tolist() for costs in switch)
+        enter, leave = (np.asarray(costs, dtype=np.float64).tolist() for costs in switch[:2])
+        if len(switch) > 2:
+            touch = np.asarray(switch[2], dtype=np.float64).tolist()
     for t in range(1, n):
         b0, b1, b2 = best
         row = score[t]
         if switch is not None:
             trans[0][2] = trans[1][2] = -enter[t]
             trans[2][0] = trans[2][1] = -leave[t]
+            if touch is not None:
+                trans[0][1] = trans[1][0] = team - touch[t]
+                trans[2][0] = trans[2][1] = -leave[t] - touch[t]
         new = []
         for j in range(3):
             c0 = b0 + trans[0][j]
@@ -300,7 +323,8 @@ def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None, s
     The step-3 entry point: builds the evidence with emissions() from the step-2 control events,
     the step-1 dead-ball probability p_dead and confident dead_labels (and optionally the step-4
     p_home with the shape_frames where it applies, and the whistle switch costs, (enter, leave)
-    from whistle_switch_costs()), then runs viterbi() separately on every graded run of the
+    from whistle_switch_costs(), optionally with the no-touch costs as a third array), then
+    runs viterbi() separately on every graded run of the
     match, so nothing carries over half-time. Frames outside graded are "D".
 
         # the 4-frame example of emissions(): one home event at frames 1-2, p_dead 0.5
@@ -311,7 +335,7 @@ def decode(match, events, p_dead, dead_labels, p_home=None, shape_frames=None, s
     transition = transition_matrix()
     labels = np.full(match.n_frames, "D", dtype="<U1")
     for start, stop in runs_of(graded):
-        costs = None if switch is None else (switch[0][start:stop], switch[1][start:stop])
+        costs = None if switch is None else tuple(c[start:stop] for c in switch)
         path = viterbi(score[start:stop], transition, costs)
         labels[start:stop] = np.array(["H", "A", "D"])[path]
     return labels
@@ -336,8 +360,8 @@ def posteriors(score, transition, switch=None):
 
     The forward-backward counterpart of viterbi(), on the same inputs: score is (frames, 3) log
     evidence from emissions(), transition the (3, 3) log transition scores, switch optional
-    (enter, leave) costs from whistle_switch_costs() for these frames, used exactly as in
-    viterbi(). The scores are treated as log weights of every possible path; a frame's
+    (enter, leave) costs from whistle_switch_costs() for these frames, with an optional third
+    array of no-touch costs, used exactly as in viterbi(). The scores are treated as log weights of every possible path; a frame's
     probability of state s is the total weight of the paths that are in s there, divided by the
     total weight of all paths. Each row sums to 1. Where one path is much better than all
     others the result is close to 1 for its state; where the evidence is balanced it is spread.
@@ -350,15 +374,18 @@ def posteriors(score, transition, switch=None):
     """
     score = np.asarray(score, dtype=np.float64)
     n = len(score)
+    touch = None
     if switch is not None:
-        enter, leave = (np.asarray(c, dtype=np.float64) for c in switch)
+        enter, leave = (np.asarray(c, dtype=np.float64) for c in switch[:2])
+        if len(switch) > 2:
+            touch = np.asarray(switch[2], dtype=np.float64)
 
     def trans_at(t):
         """(3, 3) log transition scores for the step from frame t - 1 to frame t.
 
         Without switch costs this is always `transition`. With them, entering D costs enter[t]
         and leaving D costs leave[t] on this step, exactly as in viterbi(); H <-> A keeps its
-        fixed cost.
+        fixed cost. With no-touch costs, touch[t] is added to H <-> A and to leaving D.
 
             # enter = [4, 1, 4], leave = [4, 4, 4]: entering D into frame 1 is cheap
             trans_at(1)[0, 2], trans_at(2)[0, 2]      # -> -1, -4
@@ -368,6 +395,9 @@ def posteriors(score, transition, switch=None):
         m = transition.copy()
         m[0, 2] = m[1, 2] = -enter[t]
         m[2, 0] = m[2, 1] = -leave[t]
+        if touch is not None:
+            m[0, 1] = m[1, 0] = transition[0, 1] - touch[t]
+            m[2, 0] = m[2, 1] = -leave[t] - touch[t]
         return m
 
     alpha = np.empty((n, 3))
@@ -399,6 +429,6 @@ def decode_posteriors(match, events, p_dead, dead_labels, p_home=None, shape_fra
     transition = transition_matrix()
     out = np.full((match.n_frames, 3), np.nan)
     for start, stop in runs_of(graded):
-        costs = None if switch is None else (switch[0][start:stop], switch[1][start:stop])
+        costs = None if switch is None else tuple(c[start:stop] for c in switch)
         out[start:stop] = posteriors(score[start:stop], transition, costs)
     return out

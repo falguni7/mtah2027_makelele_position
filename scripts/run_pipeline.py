@@ -20,7 +20,7 @@ data/README.md) and this repository gets the same file, byte for byte. It runs, 
                                      access: Alex compute nodes may have none, so run it once on
                                      a login node first. hmm_v7 and earlier do not need it, and
                                      the step is not listed then.
-  4. scripts/make_submission.py      run the submitted method (SUBMISSION_METHOD, hmm_v11_mix)
+  4. scripts/make_submission.py      run the submitted method (SUBMISSION_METHOD, hmm_v19_bridge)
                                      on the full match, write the frame,label CSV and check it with
                                      the official evaluation/validate_submission.py
 
@@ -43,7 +43,7 @@ data, giving the same SHA-256 as the submitted file.
     # == 1/3 build cache: skipped, cache/BAR-ATH_tactical exists
     # == 2/3 extract audio: skipped, cache/BAR-ATH_tactical_audio/audio_24k.wav exists
     # == 3/4 DFL data: skipped, ...      (only for a method that uses DFL; else 3 steps)
-    # == 4/4 hmm_v11_mix submission
+    # == 4/4 hmm_v19_bridge submission
     # ... validator output ...
     # /tmp/try.csv  sha256 3f2a...
 """
@@ -62,7 +62,7 @@ from mtah.external import dfl  # noqa: E402
 from mtah.methods import METHODS  # noqa: E402
 
 # Params
-SUBMISSION_METHOD = "hmm_v11_mix"
+SUBMISSION_METHOD = "hmm_v19_bridge"
 DEFAULT_OUT = os.path.join(ROOT, "submissions", "BAR-ATH_possession.csv")
 
 
