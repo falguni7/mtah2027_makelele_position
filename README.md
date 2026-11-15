@@ -27,6 +27,10 @@ pip install -r requirements-lock.txt
 python scripts/run_pipeline.py
 ```
 
+**⚠ WARNING: `scripts/run_pipeline.py` downloads external data. On its first run it fetches the
+DFL Bundesliga open data (about 2.5 GB, from figshare) into `external/dfl/` if it is not there
+already.**
+
 It builds the numpy cache from the tracking, homography and Smart Tagging, extracts the
 tactical video's sound (for the referee-whistle detector), runs our method `hmm_v19_bridge` and
 checks the result with the official validator. The file is `submissions/BAR-ATH_possession.csv`,
