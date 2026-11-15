@@ -80,8 +80,6 @@ core.*
 01_help.txt
 claude_notes/
 *.pdf
-# Technical document draft: kept out of the repo until we decide to publish it.
-/docs/technical_document.md
 
 # -- editors and Python ------------------------------------------------------------------------
 .idea/
