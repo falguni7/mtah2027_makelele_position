@@ -1,14 +1,19 @@
-# More than a Hack 2027 — Phase 1: Ball Possession
+# Makelele_position — our solution to More than a Hack 2027, Phase 1
 
-**Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
-and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
+This is the solution repository of team **Makelele_position** for the *More than a Hack 2027,
+Phase 1: Ball Possession* challenge (match BAR-ATH). Everything from
+[Original challenge README](#original-challenge-readme-from-the-organisers) onwards is the
+organisers' text, unchanged.
 
-A football data challenge on real professional match data, open to analysts, data scientists and
-engineers. You are given one complete LaLiga match — two camera feeds, automatic tracking of every
-player and the ball, automatic tactical tagging, and the camera-to-pitch geometry — and one
-question to answer with it.
-
----
+| What | Where |
+|---|---|
+| Team name | Makelele_position |
+| Submitted method | `hmm_v19_bridge` in [mtah/methods.py](mtah/methods.py) |
+| Submission file | made by `python scripts/run_pipeline.py` as `submissions/BAR-ATH_possession.csv` (SHA-256 `d96dfdff…`); sent on the form as `Makelele_position.csv`. Not committed: it contains match labels |
+| Technical document | [docs/technical_document.md](docs/technical_document.md); sent on the form as `Makelele_position.pdf` |
+| Our code | [mtah/](mtah/) (the method), [scripts/](scripts/) (pipeline, checks, cluster jobs) |
+| Organisers' files | the challenge docs (`*.md` at the top level), [evaluation/](evaluation/), [starter/](starter/), `games.py` |
+| Match data | not included (licensed for the competition only); put it in `data/` as in [data/README.md](data/README.md) |
 
 ## Reproducing our submission
 
@@ -23,22 +28,39 @@ python scripts/run_pipeline.py
 ```
 
 It builds the numpy cache from the tracking, homography and Smart Tagging, extracts the
-tactical video's sound (for the referee-whistle detector), runs our method `hmm_v19_bridge` and checks
-the result with the official validator. The file is `submissions/BAR-ATH_possession.csv`, and
-its SHA-256 is printed at the end. Nothing is random, so every run gives the same file. It takes
-about 25 minutes on a 16-core node, plus the one-off download of the DFL data below. See `scripts/run_pipeline.py` for the steps.
+tactical video's sound (for the referee-whistle detector), runs our method `hmm_v19_bridge` and
+checks the result with the official validator. The file is `submissions/BAR-ATH_possession.csv`,
+and its SHA-256 is printed at the end. Nothing is random, so every run gives the same file. It
+takes about 25 minutes on a 16-core node, plus the one-off download of the DFL data below. See
+`scripts/run_pipeline.py` for the steps.
 
-Methods that also learn from public labelled matches of other games (`hmm_v9` and later, which
-use the DFL Bundesliga open data, CC BY 4.0, including the submitted `hmm_v19_bridge`) need
-those matches in `external/dfl/`, about
-2.5 GB. The pipeline downloads them when such a method is the submitted one and they are
-missing; on a machine whose compute nodes have no internet access, fetch them first with
+The method also learns from public labelled matches of other games: the DFL Bundesliga open data
+(CC BY 4.0), about 2.5 GB in `external/dfl/`. The pipeline downloads it when it is missing; on a
+machine whose compute nodes have no internet access, fetch it first with
 
 ```bash
 bash scripts/data/download_external.sh --dfl-only
 ```
 
 (without `--dfl-only` it also fetches the Metrica and SkillCorner sample data, ~6.2 GB in all).
+
+---
+
+# Original challenge README (from the organisers)
+
+> The text below is the challenge README from the organisers' starter kit
+> ([metrica-sports/more-than-a-hack-2027](https://github.com/metrica-sports/more-than-a-hack-2027)),
+> kept as it was.
+
+# More than a Hack 2027 — Phase 1: Ball Possession
+
+**Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
+and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
+
+A football data challenge on real professional match data, open to analysts, data scientists and
+engineers. You are given one complete LaLiga match — two camera feeds, automatic tracking of every
+player and the ball, automatic tactical tagging, and the camera-to-pitch geometry — and one
+question to answer with it.
 
 ---
 
