@@ -273,7 +273,8 @@ python scripts/run_pipeline.py
 `run_pipeline.py` builds the cache from the raw data, extracts the sound, runs `hmm_v19_bridge`,
 writes `submissions/BAR-ATH_possession.csv`, validates it with `evaluation/validate_submission.py`
 and prints its SHA-256. Nothing is random. About 25 minutes on a 16-core node with an NVIDIA A40
-(the sequence model trains on the GPU). Tested on 2026-11-15 from a fresh clone (commit 157f7ad)
+(the sequence model trains on the GPU), with CUDA 13.0 (PyTorch 2.11.0+cu130, cuDNN 9.19, NVIDIA
+driver 615.71.10). Tested on 2026-11-15 from a fresh clone (commit 157f7ad)
 with an empty cache: byte-identical to the submitted file, SHA-256
 `d96dfdffe9c3e374f4bb0b06b901e1d2b31e3833115d403cb34bfad20e582089`.
 

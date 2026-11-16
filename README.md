@@ -38,6 +38,10 @@ and its SHA-256 is printed at the end. Nothing is random, so every run gives the
 takes about 25 minutes on a 16-core node, plus the one-off download of the DFL data below. See
 `scripts/run_pipeline.py` for the steps.
 
+**Hardware used for the submitted file:** one NVIDIA A40 GPU with CUDA 13.0 (PyTorch
+2.11.0+cu130, cuDNN 9.19, NVIDIA driver 615.71.10). On this setup a fresh clone reproduces the
+submitted file byte for byte (SHA-256 `d96dfdffe9c3e374f4bb0b06b901e1d2b31e3833115d403cb34bfad20e582089`).
+
 The method also learns from public labelled matches of other games: the DFL Bundesliga open data
 (CC BY 4.0), about 2.5 GB in `external/dfl/`. The pipeline downloads it when it is missing; on a
 machine whose compute nodes have no internet access, fetch it first with
