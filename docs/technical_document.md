@@ -14,7 +14,8 @@ and a stricter one that pins fewer frames as alive (`hmm_v18_doubtB`); the submi
 standard run's labels and takes the stricter run's dead ball only where it joins two of the
 standard run's stoppages. Both runs read the same per-frame evidence: control events and a
 team-shape model and dead-ball detector trained on our match without human labels, plus a
-frame-by-frame boosting model and a TCN + BiLSTM sequence model trained on the DFL matches.
+frame-by-frame boosting model and a TCN + BiLSTM sequence model trained on seven labelled matches
+of other games (the public DFL Bundesliga open data).
 
 Every frame is labelled H / A / D by a hidden Markov model (HMM), decoded with Viterbi per half.
 Its evidence comes from four sources: a **dead-ball
