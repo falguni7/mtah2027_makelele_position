@@ -52,6 +52,21 @@ bash scripts/data/download_external.sh --dfl-only
 
 (without `--dfl-only` it also fetches the Metrica and SkillCorner sample data, ~6.2 GB in all).
 
+The submission does not need WASB-SBDT. Only the ball-detection variants we tried and dropped
+(`hmm_v13_wasb`, `hmm_v14_gap`, and `scripts/vision/`) use it. It is not part of this repository:
+we synced its code (nttcom/WASB-SBDT, MIT) and its soccer weights into `third_party/WASB-SBDT`
+with
+
+```bash
+git clone https://github.com/nttcom/WASB-SBDT.git third_party/WASB-SBDT
+git -C third_party/WASB-SBDT checkout 923462cacdeb3353b84ddebdedb3f4b7a8553b0f
+mkdir -p third_party/WASB-SBDT/pretrained_weights
+gdown 1pg0MpMtKZ6ziYEr4oyfKYPOO3hjLw94l -O third_party/WASB-SBDT/pretrained_weights/wasb_soccer_best.pth.tar
+```
+
+(`pip install gdown`; the weights' Google Drive id is the soccer WASB entry of the repository's
+`MODEL_ZOO.md`, SHA-256 `d0369572807c2baf751880d6cdf3cce9fc6283fa8d153f18af6baf4e64d2646c`).
+
 ---
 
 # Original challenge README (from the organisers)

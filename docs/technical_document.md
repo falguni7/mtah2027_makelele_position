@@ -283,3 +283,9 @@ with an empty cache: byte-identical to the submitted file, SHA-256
 
 No match data, cache or per-frame output is in the repository or its history. No hand labels of
 BAR-ATH, no use of the public 5 minutes for training or choosing, no frame-specific rules.
+
+**Use of a hosted LLM.** We used Claude (Anthropic), a hosted LLM, to help write code and
+documentation. The match data never left our workspace. The assistant was never given the videos,
+images, sound, tracking, Smart Tagging, homography or any per-frame output. It saw the code,
+aggregates, the public challenge documentation, and the public data of other games (DFL, Metrica,
+SkillCorner).
