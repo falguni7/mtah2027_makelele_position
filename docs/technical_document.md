@@ -237,8 +237,9 @@ ball).
 
 * **Dead ball inside ball gaps** is the main uncertainty; without labels we cannot tell how much
   of the gap time we call D is real.
-* **Short stoppages inside tracked play are missed** (about a third of D frames found on the public
-  window). Only the safest fix is submitted; removing the moving-ball pins everywhere also called
+* **Short stoppages inside tracked play are missed**: after a foul the ball often keeps rolling
+  while the players stop, so those frames are kept alive, and switches into possession on a ball
+  nobody played (section 6) point to such stoppages. Only the safest fix is submitted; removing the moving-ball pins everywhere also called
   slow build-up play dead.
 * **Team evidence in long gaps is moderate**, and **all validation is indirect**: Smart Tagging is
   automatic, masking rewards stability, benchmarks are other leagues with simulated noise.
