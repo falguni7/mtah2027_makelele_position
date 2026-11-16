@@ -1,4 +1,4 @@
-# Makelele_position — our solution to More than a Hack 2027, Phase 1
+# Team Makelele_position - our solution to More than a Hack 2027, Phase 1
 
 This is the solution repository of team **Makelele_position** for the *More than a Hack 2027,
 Phase 1: Ball Possession* challenge (match BAR-ATH). Everything from
