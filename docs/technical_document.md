@@ -9,12 +9,19 @@ Submitted method: `hmm_v19_bridge`
 
 ## 1. Summary
 
+The final model is one hidden Markov model (HMM) over H / A / D, run twice on our match, a standard run (`hmm_v11_mix`)
+and a stricter one that pins fewer frames as alive (`hmm_v18_doubtB`); the submission keeps the
+standard run's labels and takes the stricter run's dead ball only where it joins two of the
+standard run's stoppages. Both runs read the same per-frame evidence: control events and a
+team-shape model and dead-ball detector trained on our match without human labels, plus a
+frame-by-frame boosting model and a TCN + BiLSTM sequence model trained on the DFL matches.
+
 Every frame is labelled H / A / D by a hidden Markov model (HMM), decoded with Viterbi per half.
-Its evidence comes from four sources, none built from a human label of BAR-ATH: a **dead-ball
+Its evidence comes from four sources: a **dead-ball
 detector** trained on rule-based confident frames, **control events** from the tracking, a
 **team-shape model** trained on this match's control events, and two **models trained on public
 labelled matches of other games** (DFL Bundesliga open data). The core, `hmm_v11_mix`, averages
-two HMM variants (one per DFL model) and decodes once; the submission, `hmm_v19_bridge`, also
+two HMM variants (one for each DFL model) and decodes once; the submission, `hmm_v19_bridge`, also
 joins two of the core's stoppages where a stricter second run says the short stretch between them
 is dead (4 stretches, 0.4 % of graded frames). It reports 287 possessions of mean 13.1 s (H 34.7 %,
 A 24.4 %, D 40.9 % of graded frames). Every choice was made with label-free checks on our match and
@@ -133,7 +140,7 @@ often rolls on faster than 2.5 m/s while the players stop, and those frames were
 `hmm_v18_doubtB` leaves such frames unknown when the players walk (below 1.5 m/s) or nobody is
 within 3 m of the ball. On its own it adds many stoppages in open play, so `hmm_v19_bridge` keeps
 `hmm_v11_mix` and accepts `hmm_v18_doubtB`'s D only where it fills a whole alive stretch between
-two of `hmm_v11_mix`'s own stoppages: 4 stretches of about 6 s on BAR-ATH.
+two of `hmm_v11_mix`'s own stoppages.
 
 ## 4. Possession rules we implemented
 
@@ -181,7 +188,7 @@ Possession changes when the opponent gains *controlled* possession (CHALLENGE.md
 * **Own ball detection** (`hmm_v13_wasb`, `hmm_v14_gap`): WASB-SBDT fine-tuned on our video with
   the tracking ball as pseudo-label (held-out hits 18 % → 42 %); correcting or filling the tracking
   ball improved no check.
-* **Smart Tagging phases as input** (`hmm_v15_tag`): no clear gain, and it would cost our check.
+* **Smart Tagging phases as input** (`hmm_v15_tag`): no clear gain, and it would cost our validation check.
 * **Broadcast cuts and replays**: AUC 0.91 alone, nothing added to the classifier (the director
   cuts away when the players stop, which their speed already shows).
 * **No touch, no change of possession** (`hmm_v16_touch`): the smoothed ball shows no clear jump at
@@ -210,7 +217,7 @@ not get worse.
   (40.7 % of the ball hidden), and the team side on 3 Metrica matches with the true dead ball.
 * **Public 5 minutes:** pipeline and format checks; one look after choosing gave spellF1 0.522
   and macroF1 0.719 (equal for `hmm_v11_mix`) against 0.326 / 0.621 for `baseline_smooth50`.
-  With 17 possessions, differences below ~0.3 are noise.
+  With 17 possessions, differences below ~0.3 are noise. Used only to check the pipeline, never for choosing or training.
 
 | check | baseline_smooth50 | control rule, no HMM | hmm_v11_mix | **hmm_v19_bridge** |
 |---|---|---|---|---|
@@ -258,6 +265,8 @@ With more time we would build:
 * **calibrated confidences**, so the method can output X where it is unsure;
 * an **audit of the player tracks**, repairing team switches with jersey-colour re-identification;
 * **goalkeeper possession** as its own case instead of an unexplained gap.
+* **action spotting** trained on public video datasets of other games (such as SoccerNet), with
+  the spotted passes, receptions and restarts turned into possession labels.
 
 ## 10. Reproduction
 
@@ -273,7 +282,7 @@ python scripts/run_pipeline.py
 
 `run_pipeline.py` builds the cache from the raw data, extracts the sound, runs `hmm_v19_bridge`,
 writes `submissions/BAR-ATH_possession.csv`, validates it with `evaluation/validate_submission.py`
-and prints its SHA-256. Nothing is random. About 25 minutes on a 16-core node with an NVIDIA A40
+and prints its SHA-256. About 25 minutes on a 16-core node with an NVIDIA A40
 (the sequence model trains on the GPU), with CUDA 13.0 (PyTorch 2.11.0+cu130, cuDNN 9.19, NVIDIA
 driver 615.71.10). Tested on 2026-11-15 from a fresh clone (commit 157f7ad)
 with an empty cache: byte-identical to the submitted file, SHA-256
